@@ -12,6 +12,9 @@ class VPhoneMenuController {
     var onFilesPressed: (() -> Void)?
     var locationProvider: VPhoneLocationProvider?
     var locationMenuItem: NSMenuItem?
+    var locationPresetMenuItem: NSMenuItem?
+    var locationReplayStartItem: NSMenuItem?
+    var locationReplayStopItem: NSMenuItem?
     var screenRecorder: VPhoneScreenRecorder?
     var recordingItem: NSMenuItem?
     var signer: VPhoneSigner?

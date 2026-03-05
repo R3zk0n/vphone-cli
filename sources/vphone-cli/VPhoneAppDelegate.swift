@@ -150,6 +150,7 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             control.onDisconnect = { [weak mc, weak provider = locationProvider] in
+                provider?.stopReplay()
                 provider?.stopForwarding()
                 mc?.updateLocationCapability(available: false)
             }
@@ -163,6 +164,7 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             control.onDisconnect = { [weak provider = locationProvider] in
+                provider?.stopReplay()
                 provider?.stopForwarding()
             }
         }

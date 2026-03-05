@@ -9,12 +9,44 @@ import Foundation
 /// after vphoned reconnects) — re-sends the last known position.
 @MainActor
 class VPhoneLocationProvider: NSObject {
+    struct ReplayPoint {
+        let latitude: Double
+        let longitude: Double
+        let altitude: Double
+        let horizontalAccuracy: Double
+        let verticalAccuracy: Double
+        let speed: Double
+        let course: Double
+
+        init(
+            latitude: Double,
+            longitude: Double,
+            altitude: Double = 0,
+            horizontalAccuracy: Double = 5,
+            verticalAccuracy: Double = 8,
+            speed: Double = 0,
+            course: Double = -1
+        ) {
+            self.latitude = latitude
+            self.longitude = longitude
+            self.altitude = altitude
+            self.horizontalAccuracy = horizontalAccuracy
+            self.verticalAccuracy = verticalAccuracy
+            self.speed = speed
+            self.course = course
+        }
+    }
+
     private let control: VPhoneControl
     private var hostModeStarted = false
 
     private var locationManager: CLLocationManager?
     private var delegateProxy: LocationDelegateProxy?
     private var lastLocation: CLLocation?
+    private var replayTask: Task<Void, Never>?
+    private var replayName: String?
+
+    var isReplaying: Bool { replayTask != nil }
 
     init(control: VPhoneControl) {
         self.control = control
@@ -35,6 +67,7 @@ class VPhoneLocationProvider: NSObject {
 
     /// Begin sending location to the guest.  Safe to call on every (re)connect.
     func startForwarding() {
+        stopReplay()
         guard let mgr = locationManager else { return }
         mgr.requestAlwaysAuthorization()
         mgr.startUpdatingLocation()
@@ -47,13 +80,100 @@ class VPhoneLocationProvider: NSObject {
         }
     }
 
-    /// Stop forwarding and clear the simulated location in the guest.
+    /// Stop forwarding host location updates.
     func stopForwarding() {
         if hostModeStarted {
             locationManager?.stopUpdatingLocation()
             hostModeStarted = false
             print("[location] stopped host location tracking")
         }
+    }
+
+    /// Send a fixed simulated location to the guest.
+    func sendPreset(name: String, latitude: Double, longitude: Double, altitude: Double = 0) {
+        stopReplay()
+        sendSimulatedLocation(
+            latitude: latitude,
+            longitude: longitude,
+            altitude: altitude,
+            horizontalAccuracy: 5,
+            verticalAccuracy: 8,
+            speed: 0,
+            course: -1
+        )
+        print("[location] applied preset '\(name)' (\(latitude), \(longitude))")
+    }
+
+    /// Start replaying a list of simulated locations at a fixed interval.
+    func startReplay(
+        name: String,
+        points: [ReplayPoint],
+        intervalSeconds: Double = 1.5,
+        loop: Bool = true
+    ) {
+        guard !points.isEmpty else {
+            print("[location] replay '\(name)' ignored: no points")
+            return
+        }
+
+        stopForwarding()
+        stopReplay()
+
+        replayName = name
+        let sleepNanos = UInt64((max(intervalSeconds, 0.1) * 1_000_000_000).rounded())
+        print(
+            "[location] starting replay '\(name)' (\(points.count) points, interval \(String(format: "%.1f", intervalSeconds))s, loop=\(loop))"
+        )
+
+        replayTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.replayTask = nil
+                self.replayName = nil
+            }
+
+            var index = 0
+            while !Task.isCancelled {
+                let point = points[index]
+                self.sendSimulatedLocation(
+                    latitude: point.latitude,
+                    longitude: point.longitude,
+                    altitude: point.altitude,
+                    horizontalAccuracy: point.horizontalAccuracy,
+                    verticalAccuracy: point.verticalAccuracy,
+                    speed: point.speed,
+                    course: point.course
+                )
+
+                index += 1
+                if index >= points.count {
+                    if loop {
+                        index = 0
+                    } else {
+                        break
+                    }
+                }
+
+                try? await Task.sleep(nanoseconds: sleepNanos)
+            }
+
+            if Task.isCancelled {
+                print("[location] replay cancelled: \(name)")
+            } else {
+                print("[location] replay finished: \(name)")
+            }
+        }
+    }
+
+    /// Stop an active replay task.
+    func stopReplay() {
+        guard let replayTask else { return }
+        replayTask.cancel()
+        self.replayTask = nil
+        if let replayName {
+            print("[location] stopped replay: \(replayName)")
+        }
+        replayName = nil
     }
 
     private func forward(_ location: CLLocation) {
@@ -70,6 +190,40 @@ class VPhoneLocationProvider: NSObject {
             verticalAccuracy: location.verticalAccuracy,
             speed: location.speed,
             course: location.course
+        )
+    }
+
+    private func sendSimulatedLocation(
+        latitude: Double,
+        longitude: Double,
+        altitude: Double,
+        horizontalAccuracy: Double,
+        verticalAccuracy: Double,
+        speed: Double,
+        course: Double
+    ) {
+        let coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        lastLocation = CLLocation(
+            coordinate: coordinate,
+            altitude: altitude,
+            horizontalAccuracy: horizontalAccuracy,
+            verticalAccuracy: verticalAccuracy,
+            timestamp: Date()
+        )
+
+        guard control.isConnected else {
+            print("[location] simulate: not connected, cached for later")
+            return
+        }
+
+        control.sendLocation(
+            latitude: latitude,
+            longitude: longitude,
+            altitude: altitude,
+            horizontalAccuracy: horizontalAccuracy,
+            verticalAccuracy: verticalAccuracy,
+            speed: speed,
+            course: course
         )
     }
 }
