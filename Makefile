@@ -230,10 +230,10 @@ restore:
 .PHONY: ramdisk_build ramdisk_send
 
 ramdisk_build:
-	cd $(VM_DIR) && $(PYTHON) "$(CURDIR)/$(SCRIPTS)/ramdisk_build.py" .
+	cd $(VM_DIR) && RAMDISK_UDID="$(RAMDISK_UDID)" $(PYTHON) "$(CURDIR)/$(SCRIPTS)/ramdisk_build.py" .
 
 ramdisk_send:
-	cd $(VM_DIR) && IRECOVERY="$(CURDIR)/$(IRECOVERY)" IRECOVERY_ECID="$(IRECOVERY_ECID)" \
+	cd $(VM_DIR) && IRECOVERY="$(CURDIR)/$(IRECOVERY)" IRECOVERY_ECID="$(IRECOVERY_ECID)" RAMDISK_UDID="$(RAMDISK_UDID)" RESTORE_UDID="$(RESTORE_UDID)" \
 		zsh "$(CURDIR)/$(SCRIPTS)/ramdisk_send.sh"
 
 # ═══════════════════════════════════════════════════════════════════

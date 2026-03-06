@@ -168,6 +168,12 @@
 | `DEV+RAMDISK` | `make fw_patch_dev` | release TXM + base TXM patch (1) | base kernel (28), same derivation rule                                           | restore kernel from `fw_patch_dev` (28) | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
 | `JB+RAMDISK`  | `make fw_patch_jb`  | release TXM + base TXM patch (1) | base kernel (28), same derivation rule                                           | restore kernel from `fw_patch_jb` (53)  | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
 
+### Ramdisk Build-Time Identity Patch
+
+| # | Patch Site                                           | Purpose                                                                 | Regular | Dev | JB  |
+| - | ---------------------------------------------------- | ----------------------------------------------------------------------- | :-----: | :-: | :-: |
+| 1 | `ramdisk_input/ssh/usr/local/bin/restored_external` | Replace default USBMux serial label (`SSHRD_Script ...`) with `UDID`   |    Y    |  Y  |  Y  |
+
 ## Cross-Version Dynamic Snapshot
 
 | Case                | TXM_JB_PATCHES | KERNEL_JB_PATCHES |

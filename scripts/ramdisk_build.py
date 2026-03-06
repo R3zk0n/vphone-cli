@@ -51,6 +51,8 @@ from patchers.kernel import KernelPatcher
 OUTPUT_DIR = "Ramdisk"
 TEMP_DIR = "ramdisk_builder_temp"
 INPUT_DIR = "ramdisk_input"
+RESTORED_EXTERNAL_PATH = "usr/local/bin/restored_external"
+RESTORED_EXTERNAL_SERIAL_MARKER = b"SSHRD_Script Sep 22 2022 18:56:50"
 
 # Ramdisk boot-args
 RAMDISK_BOOT_ARGS = b"serial=3 rd=md0 debug=0x2014e -v wdt=-1 %s"
@@ -310,6 +312,50 @@ def patch_ibec_bootargs(data):
     return True
 
 
+def patch_restored_external_usbmux_label(mountpoint):
+    """Patch restored_external USBMux serial label when RAMDISK_UDID is provided."""
+    target_udid = os.environ.get("RAMDISK_UDID", "").strip()
+    if not target_udid:
+        print("  [*] RAMDISK_UDID not set; keeping default restored_external USBMux label")
+        return
+
+    try:
+        target_bytes = target_udid.encode("ascii")
+    except UnicodeEncodeError:
+        print(f"[-] RAMDISK_UDID must be ASCII, got: {target_udid!r}")
+        sys.exit(1)
+
+    marker_len = len(RESTORED_EXTERNAL_SERIAL_MARKER)
+    if len(target_bytes) > marker_len:
+        print(f"[-] RAMDISK_UDID too long for restored_external label ({len(target_bytes)} > {marker_len})")
+        print(f"    RAMDISK_UDID={target_udid}")
+        sys.exit(1)
+
+    restored_external = os.path.join(mountpoint, RESTORED_EXTERNAL_PATH)
+    if not os.path.isfile(restored_external):
+        print(f"[-] Missing restored_external for USBMux label patch: {restored_external}")
+        sys.exit(1)
+
+    with open(restored_external, "rb") as f:
+        data = f.read()
+
+    off = data.find(RESTORED_EXTERNAL_SERIAL_MARKER)
+    if off < 0:
+        print("[-] Could not find default USBMux serial marker in restored_external")
+        sys.exit(1)
+
+    if data.find(RESTORED_EXTERNAL_SERIAL_MARKER, off + 1) >= 0:
+        print("[!] Multiple USBMux serial markers found in restored_external; patching first occurrence")
+
+    replacement = target_bytes + (b"\x00" * (marker_len - len(target_bytes)))
+    patched = data[:off] + replacement + data[off + marker_len :]
+
+    with open(restored_external, "wb") as f:
+        f.write(patched)
+
+    print(f"  [+] Patched restored_external USBMux label to: {target_udid}")
+
+
 # ══════════════════════════════════════════════════════════════════
 # Ramdisk DMG building
 # ══════════════════════════════════════════════════════════════════
@@ -397,6 +443,7 @@ def build_ramdisk(restore_dir, im4m_path, vm_dir, input_dir, output_dir, temp_di
         run_sudo(
             [gtar_bin, "-x", "--no-overwrite-dir", "-f", ssh_tar, "-C", mountpoint]
         )
+        patch_restored_external_usbmux_label(mountpoint)
 
         # Remove unnecessary files
         for rel_path in RAMDISK_REMOVE:

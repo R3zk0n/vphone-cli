@@ -9,6 +9,7 @@ set -euo pipefail
 
 IRECOVERY="${IRECOVERY:-irecovery}"
 IRECOVERY_ECID="${IRECOVERY_ECID:-}"
+RAMDISK_UDID="${RAMDISK_UDID:-${RESTORE_UDID:-}}"
 RAMDISK_DIR="${1:-Ramdisk}"
 
 IRECOVERY_ARGS=()
@@ -22,6 +23,18 @@ if [[ -n "$IRECOVERY_ECID" ]]; then
     IRECOVERY_ECID="0x${IRECOVERY_ECID:u}"
     IRECOVERY_ARGS=(-i "$IRECOVERY_ECID")
     echo "[*] Using ECID selector for irecovery: ${IRECOVERY_ECID}"
+fi
+
+echo "[*] Identity context for ramdisk_send:"
+if [[ -n "$RAMDISK_UDID" ]]; then
+    echo "    UDID: ${RAMDISK_UDID}"
+else
+    echo "    UDID: <unset>"
+fi
+if [[ -n "$IRECOVERY_ECID" ]]; then
+    echo "    ECID: ${IRECOVERY_ECID}"
+else
+    echo "    ECID: <unset>"
 fi
 
 irecovery_cmd() {
