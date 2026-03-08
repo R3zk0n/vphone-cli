@@ -232,7 +232,7 @@ echo "  AppOS:    $CRYPTEX_APPOS"
 
 # ═══════════ 1/7 INSTALL CRYPTEX ══════════════════════════════
 echo ""
-echo "[1/7] Installing Cryptex (SystemOS + AppOS)..."
+echo "[1/8] Installing Cryptex (SystemOS + AppOS)..."
 
 # Mount device rootfs first to check existing state
 echo "  Mounting device rootfs rw..."
@@ -337,7 +337,7 @@ fi
 
 # ═══════════ 2/7 PATCH SEPUTIL ════════════════════════════════
 echo ""
-echo "[2/7] Patching seputil..."
+echo "[2/8] Patching seputil..."
 
 # Always patch from .bak (original unpatched binary)
 if ! remote_file_exists "/mnt1/usr/libexec/seputil.bak"; then
@@ -360,7 +360,7 @@ echo "  [+] seputil patched"
 
 # ═══════════ 3/7 INSTALL GPU DRIVER ══════════════════════════
 echo ""
-echo "[3/7] Installing AppleParavirtGPUMetalIOGPUFamily..."
+echo "[3/8] Installing AppleParavirtGPUMetalIOGPUFamily..."
 
 scp_to "$INPUT_DIR/custom/AppleParavirtGPUMetalIOGPUFamily.tar" "/mnt1"
 ssh_cmd "/usr/bin/tar --preserve-permissions --no-overwrite-dir \
@@ -382,7 +382,7 @@ echo "  [+] GPU driver installed"
 
 # ═══════════ 4/7 INSTALL IOSBINPACK64 ════════════════════════
 echo ""
-echo "[4/7] Installing iosbinpack64..."
+echo "[4/8] Installing iosbinpack64..."
 
 scp_to "$INPUT_DIR/jb/iosbinpack64.tar" "/mnt1"
 ssh_cmd "/usr/bin/tar --preserve-permissions --no-overwrite-dir \
@@ -393,7 +393,7 @@ echo "  [+] iosbinpack64 installed"
 
 # ═══════════ 5/7 PATCH LAUNCHD_CACHE_LOADER ══════════════════
 echo ""
-echo "[5/7] Patching launchd_cache_loader..."
+echo "[5/8] Patching launchd_cache_loader..."
 
 # Always patch from .bak (original unpatched binary)
 if ! remote_file_exists "/mnt1/usr/libexec/launchd_cache_loader.bak"; then
@@ -411,7 +411,7 @@ echo "  [+] launchd_cache_loader patched"
 
 # ═══════════ 6/7 PATCH MOBILEACTIVATIOND ═════════════════════
 echo ""
-echo "[6/7] Patching mobileactivationd..."
+echo "[6/8] Patching mobileactivationd..."
 
 # Always patch from .bak (original unpatched binary)
 if ! remote_file_exists "/mnt1/usr/libexec/mobileactivationd.bak"; then
@@ -429,7 +429,7 @@ echo "  [+] mobileactivationd patched"
 
 # ═══════════ 7/7 LAUNCHDAEMONS + LAUNCHD.PLIST ══════════════
 echo ""
-echo "[7/7] Installing LaunchDaemons..."
+echo "[7/8] Installing LaunchDaemons..."
 
 # Install vphoned (vsock HID injector daemon)
 VPHONED_SRC="$SCRIPT_DIR/vphoned"
@@ -499,6 +499,26 @@ scp_to "$TEMP_DIR/launchd.plist" "/mnt1/System/Library/xpc/launchd.plist"
 ssh_cmd "/bin/chmod 0644 /mnt1/System/Library/xpc/launchd.plist"
 
 echo "  [+] LaunchDaemons installed"
+
+# ═══════════ 8/8 SHELL PROFILES ══════════════════════════════
+echo ""
+echo "[8/8] Setting up shell profiles..."
+
+# Create /var/root/.bashrc and .bash_profile with proper PATH
+# so serial console and SSH sessions have iosbinpack64 tools available.
+ssh_cmd "/bin/mkdir -p /mnt1/var/root"
+for profile in .bashrc .bash_profile; do
+    ssh_cmd "printf '%s\n' \
+        '# vphone shell environment' \
+        'export PATH=\"/iosbinpack64/usr/bin:/iosbinpack64/bin:/iosbinpack64/usr/sbin:/iosbinpack64/sbin:/usr/bin:/bin:/usr/sbin:/sbin\"' \
+        'export PS1=\"\\h:\\w \\u\\$ \"' \
+        'export TERM=xterm-256color' \
+        > /mnt1/var/root/$profile"
+    ssh_cmd "/bin/chmod 0644 /mnt1/var/root/$profile"
+    echo "  /var/root/$profile created"
+done
+
+echo "  [+] Shell profiles installed"
 
 # ═══════════ CLEANUP ═════════════════════════════════════════
 echo ""
