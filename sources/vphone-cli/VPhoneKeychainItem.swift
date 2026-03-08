@@ -7,6 +7,7 @@ struct VPhoneKeychainItem: Identifiable, Hashable {
     let service: String
     let label: String
     let accessGroup: String
+    let protection: String
     let server: String
     let value: String
     let valueEncoding: String
@@ -52,6 +53,29 @@ struct VPhoneKeychainItem: Identifiable, Hashable {
         return "(unnamed)"
     }
 
+    var protectionDescription: String {
+        switch protection {
+        case "ak": "WhenUnlocked"
+        case "ck": "AfterFirstUnlock"
+        case "dk": "Always"
+        case "aku": "WhenUnlocked (ThisDevice)"
+        case "cku": "AfterFirstUnlock (ThisDevice)"
+        case "dku": "Always (ThisDevice)"
+        case "akpu": "WhenPasscodeSet (ThisDevice)"
+        default: protection
+        }
+    }
+
+    var displayDate: String {
+        if let modified {
+            return Self.dateFormatter.string(from: modified)
+        }
+        if let created {
+            return Self.dateFormatter.string(from: created)
+        }
+        return "—"
+    }
+
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .short
@@ -59,10 +83,13 @@ struct VPhoneKeychainItem: Identifiable, Hashable {
         return f
     }()
 
-    var displayDate: String {
-        guard let modified else { return "—" }
-        return Self.dateFormatter.string(from: modified)
-    }
+    private static let sqliteDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f
+    }()
 }
 
 extension VPhoneKeychainItem {
@@ -74,6 +101,7 @@ extension VPhoneKeychainItem {
         service = entry["service"] as? String ?? ""
         label = entry["label"] as? String ?? ""
         accessGroup = entry["accessGroup"] as? String ?? ""
+        protection = entry["protection"] as? String ?? ""
         server = entry["server"] as? String ?? ""
         value = entry["value"] as? String ?? ""
         valueEncoding = entry["valueEncoding"] as? String ?? ""
@@ -81,16 +109,25 @@ extension VPhoneKeychainItem {
 
         if let ts = entry["created"] as? Double {
             created = Date(timeIntervalSince1970: ts)
+        } else if let ts = entry["created"] as? NSNumber {
+            created = Date(timeIntervalSince1970: ts.doubleValue)
+        } else if let str = entry["createdStr"] as? String {
+            created = Self.sqliteDateFormatter.date(from: str)
         } else {
             created = nil
         }
+
         if let ts = entry["modified"] as? Double {
             modified = Date(timeIntervalSince1970: ts)
+        } else if let ts = entry["modified"] as? NSNumber {
+            modified = Date(timeIntervalSince1970: ts.doubleValue)
+        } else if let str = entry["modifiedStr"] as? String {
+            modified = Self.sqliteDateFormatter.date(from: str)
         } else {
             modified = nil
         }
 
-        // Unique ID from class + index
-        id = "\(cls)-\(index)-\(account)-\(service)"
+        let rowid = (entry["_rowid"] as? NSNumber)?.intValue ?? index
+        id = "\(cls)-\(rowid)"
     }
 }

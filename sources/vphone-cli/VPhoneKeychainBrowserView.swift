@@ -12,6 +12,11 @@ struct VPhoneKeychainBrowserView: View {
                 .overlay(controlBar.frame(maxHeight: .infinity, alignment: .bottom))
                 .searchable(text: $model.searchText, prompt: "Filter keychain items")
                 .toolbar { toolbarContent }
+
+            if model.showDiagnostics {
+                Divider()
+                diagnosticsPanel
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await model.refresh() }
@@ -68,6 +73,14 @@ struct VPhoneKeychainBrowserView: View {
             }
             .width(min: 80, ideal: 160, max: .infinity)
 
+            TableColumn("Protection", value: \.protection) { item in
+                Text(item.protection.isEmpty ? "—" : item.protection)
+                    .font(.system(.body, design: .monospaced))
+                    .lineLimit(1)
+                    .help(item.protectionDescription)
+            }
+            .width(min: 40, ideal: 60, max: 80)
+
             TableColumn("Value", value: \.value) { item in
                 Text(item.displayValue)
                     .font(.system(.body, design: .monospaced))
@@ -100,7 +113,6 @@ struct VPhoneKeychainBrowserView: View {
 
             Divider()
 
-            // Class filter picker
             Picker("Class", selection: $model.filterClass) {
                 ForEach(VPhoneKeychainBrowserModel.classFilters, id: \.value) { filter in
                     Text(filter.label).tag(filter.value)
@@ -116,11 +128,76 @@ struct VPhoneKeychainBrowserView: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 60)
+
+            Spacer()
+
+            if model.isLoading {
+                ProgressView()
+                    .controlSize(.small)
+            }
         }
         .padding(.horizontal, 8)
         .frame(height: controlBarHeight)
         .frame(maxWidth: .infinity)
         .background(.bar)
+    }
+
+    // MARK: - Diagnostics Panel
+
+    var diagnosticsPanel: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Diagnostics")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Text("\(model.diagnostics.count) entries")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+
+                Button {
+                    let text = model.diagnostics.joined(separator: "\n")
+                    if !text.isEmpty {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
+                    }
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.borderless)
+                .help("Copy diagnostics to clipboard")
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.bar)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(Array(model.diagnostics.enumerated()), id: \.offset) { index, line in
+                            Text(line)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 1)
+                                .id(index)
+                        }
+                    }
+                }
+                .onChange(of: model.diagnostics.count) { _, newCount in
+                    if newCount > 0 {
+                        proxy.scrollTo(newCount - 1, anchor: .bottom)
+                    }
+                }
+            }
+            .frame(height: 140)
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
+        }
     }
 
     // MARK: - Toolbar
@@ -151,6 +228,14 @@ struct VPhoneKeychainBrowserView: View {
             }
             .disabled(model.selection.isEmpty)
         }
+        ToolbarItem {
+            Button {
+                model.showDiagnostics.toggle()
+            } label: {
+                Label("Diagnostics", systemImage: model.showDiagnostics ? "ladybug.fill" : "ladybug")
+            }
+            .help("Toggle diagnostics log panel")
+        }
     }
 
     // MARK: - Context Menu
@@ -161,18 +246,36 @@ struct VPhoneKeychainBrowserView: View {
         Button("Copy Service") { copyField(ids: ids, keyPath: \.service) }
         Button("Copy Value") { copyField(ids: ids, keyPath: \.value) }
         Button("Copy Access Group") { copyField(ids: ids, keyPath: \.accessGroup) }
+        Button("Copy Protection") { copyField(ids: ids, keyPath: \.protection) }
+        Divider()
+        Button("Copy Row (TSV)") { copyRows(ids: ids) }
         Divider()
         Button("Refresh") { Task { await model.refresh() } }
     }
 
-    // MARK: - Actions
+    // MARK: - Copy Actions
 
     func copySelected() {
         let selected = model.filteredItems.filter { model.selection.contains($0.id) }
-        let text = selected.map { item in
-            "\(item.displayClass)\t\(item.account)\t\(item.service)\t\(item.accessGroup)\t\(item.displayValue)"
-        }.joined(separator: "\n")
-        NSPasteboard.general.prepareForNewContents()
+        guard !selected.isEmpty else { return }
+        let header = "Class\tAccount\tService\tAccess Group\tProtection\tValue"
+        let rows = selected.map { item in
+            "\(item.displayClass)\t\(item.account)\t\(item.service)\t\(item.accessGroup)\t\(item.protection)\t\(item.displayValue)"
+        }
+        let text = ([header] + rows).joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    func copyRows(ids: Set<VPhoneKeychainItem.ID>) {
+        let selected = model.filteredItems.filter { ids.contains($0.id) }
+        guard !selected.isEmpty else { return }
+        let header = "Class\tAccount\tService\tAccess Group\tProtection\tValue"
+        let rows = selected.map { item in
+            "\(item.displayClass)\t\(item.account)\t\(item.service)\t\(item.accessGroup)\t\(item.protection)\t\(item.displayValue)"
+        }
+        let text = ([header] + rows).joined(separator: "\n")
+        NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
 
@@ -180,8 +283,10 @@ struct VPhoneKeychainBrowserView: View {
         let values = model.filteredItems
             .filter { ids.contains($0.id) }
             .map { $0[keyPath: keyPath] }
+            .filter { !$0.isEmpty }
             .joined(separator: "\n")
-        NSPasteboard.general.prepareForNewContents()
+        guard !values.isEmpty else { return }
+        NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(values, forType: .string)
     }
 }

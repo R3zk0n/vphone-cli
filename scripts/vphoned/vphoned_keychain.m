@@ -74,13 +74,13 @@ static NSArray *query_db_table(sqlite3 *db, NSString *table, NSString *className
 
     if (isInet) {
         sql = [NSString stringWithFormat:
-            @"SELECT rowid, acct, svce, agrp, labl, data, cdat, mdat, srvr, ptcl, port, path FROM %@", table];
+            @"SELECT rowid, acct, svce, agrp, labl, data, cdat, mdat, pdmn, srvr, ptcl, port, path FROM %@", table];
     } else if (isCert || isKeys) {
         sql = [NSString stringWithFormat:
-            @"SELECT rowid, agrp, labl, data, cdat, mdat FROM %@", table];
+            @"SELECT rowid, agrp, labl, data, cdat, mdat, pdmn FROM %@", table];
     } else {
         sql = [NSString stringWithFormat:
-            @"SELECT rowid, acct, svce, agrp, labl, data, cdat, mdat FROM %@", table];
+            @"SELECT rowid, acct, svce, agrp, labl, data, cdat, mdat, pdmn FROM %@", table];
     }
 
     sqlite3_stmt *stmt = NULL;
@@ -128,6 +128,10 @@ static NSArray *query_db_table(sqlite3 *db, NSString *table, NSString *className
         if (cdat.length > 0) entry[@"createdStr"] = cdat;
         if (mdat.length > 0) entry[@"modifiedStr"] = mdat;
 
+        // Protection class (pdmn)
+        NSString *pdmn = col_text(stmt, col++);
+        if (pdmn.length > 0) entry[@"protection"] = pdmn;
+
         // inet-specific fields
         if (isInet) {
             NSString *server = col_text(stmt, col++);
@@ -149,7 +153,7 @@ static NSArray *query_db_table(sqlite3 *db, NSString *table, NSString *className
 
     NSUInteger count = output.count;
     if (count > 0) {
-        [diag addObject:[NSString stringWithFormat:@"%@: %lu", className, (unsigned long)count]];
+        [diag addObject:[NSString stringWithFormat:@"%@: %lu rows", className, (unsigned long)count]];
     } else {
         [diag addObject:[NSString stringWithFormat:@"%@: empty", className]];
     }
@@ -165,6 +169,8 @@ static NSDictionary *query_keychain_db(NSString *filterClass, NSMutableArray *di
         NSLog(@"vphoned: sqlite3_open(%@) failed: %d", KEYCHAIN_DB_PATH, rc);
         return @{@"items": @[], @"diag": diag};
     }
+
+    [diag addObject:[NSString stringWithFormat:@"opened %@", KEYCHAIN_DB_PATH]];
 
     NSMutableArray *allItems = [NSMutableArray array];
 
@@ -183,96 +189,6 @@ static NSDictionary *query_keychain_db(NSString *filterClass, NSMutableArray *di
 
     sqlite3_close(db);
     return @{@"items": allItems};
-}
-
-// MARK: - SecItemCopyMatching (original approach, kept as fallback)
-
-static NSArray *query_class(CFStringRef secClass, NSString *className, NSMutableArray *diag) {
-    NSDictionary *query = @{
-        (__bridge id)kSecClass:              (__bridge id)secClass,
-        (__bridge id)kSecMatchLimit:         (__bridge id)kSecMatchLimitAll,
-        (__bridge id)kSecReturnAttributes:   @YES,
-        (__bridge id)kSecReturnData:         @YES,
-        (__bridge id)kSecAttrSynchronizable: (__bridge id)kSecAttrSynchronizableAny,
-    };
-
-    CFTypeRef result = NULL;
-    OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
-
-    if (status != errSecSuccess && status != errSecItemNotFound) {
-        NSLog(@"vphoned: %@ with data failed (%d), retrying attributes-only", className, (int)status);
-        NSDictionary *fallback = @{
-            (__bridge id)kSecClass:              (__bridge id)secClass,
-            (__bridge id)kSecMatchLimit:         (__bridge id)kSecMatchLimitAll,
-            (__bridge id)kSecReturnAttributes:   @YES,
-            (__bridge id)kSecAttrSynchronizable: (__bridge id)kSecAttrSynchronizableAny,
-        };
-        status = SecItemCopyMatching((__bridge CFDictionaryRef)fallback, &result);
-        if (status == errSecSuccess) {
-            [diag addObject:[NSString stringWithFormat:@"%@: ok (no data)", className]];
-        }
-    }
-
-    if (status == errSecItemNotFound) {
-        [diag addObject:[NSString stringWithFormat:@"%@: not found", className]];
-        return @[];
-    }
-    if (status != errSecSuccess) {
-        NSLog(@"vphoned: SecItemCopyMatching(%@) failed: %d", className, (int)status);
-        [diag addObject:[NSString stringWithFormat:@"%@: error %d", className, (int)status]];
-        return @[];
-    }
-
-    NSArray *items = (__bridge_transfer NSArray *)result;
-    NSMutableArray *output = [NSMutableArray arrayWithCapacity:items.count];
-
-    for (NSDictionary *attrs in items) {
-        NSMutableDictionary *entry = [NSMutableDictionary dictionary];
-        entry[@"class"] = className;
-
-        struct { NSString *key; CFStringRef attr; } fields[] = {
-            { @"account",      kSecAttrAccount },
-            { @"service",      kSecAttrService },
-            { @"label",        kSecAttrLabel },
-            { @"accessGroup",  kSecAttrAccessGroup },
-            { @"accessible",   kSecAttrAccessible },
-            { @"server",       kSecAttrServer },
-            { @"protocol",     kSecAttrProtocol },
-            { @"port",         kSecAttrPort },
-            { @"path",         kSecAttrPath },
-            { @"description",  kSecAttrDescription },
-            { @"comment",      kSecAttrComment },
-            { @"type",         kSecAttrType },
-            { @"synchronizable", kSecAttrSynchronizable },
-        };
-
-        for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
-            id val = attrs[(__bridge id)fields[i].attr];
-            if (val) entry[fields[i].key] = safe_value(val);
-        }
-
-        id cdate = attrs[(__bridge id)kSecAttrCreationDate];
-        if (cdate) entry[@"created"] = safe_value(cdate);
-        id mdate = attrs[(__bridge id)kSecAttrModificationDate];
-        if (mdate) entry[@"modified"] = safe_value(mdate);
-
-        NSData *vdata = attrs[(__bridge id)kSecValueData];
-        if (vdata) {
-            NSString *str = [[NSString alloc] initWithData:vdata encoding:NSUTF8StringEncoding];
-            if (str) {
-                entry[@"value"] = str;
-                entry[@"valueEncoding"] = @"utf8";
-            } else {
-                entry[@"value"] = [vdata base64EncodedStringWithOptions:0];
-                entry[@"valueEncoding"] = @"base64";
-            }
-            entry[@"valueSize"] = @(vdata.length);
-        }
-
-        [output addObject:entry];
-    }
-
-    return output;
 }
 
 // MARK: - Command Handler

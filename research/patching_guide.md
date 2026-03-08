@@ -492,10 +492,10 @@ cmp -l /tmp/kc_clean.raw /tmp/kc_patched.raw | head -20
 Setting up debugserver to attach with in IDA is pretty easy, it allows us attach to the instance and emulator and debugging. 
 
 
-
-
 ### Kernelcache Debugging
 ---
+
+KernelCache Debugging is very important. 
 
 
 

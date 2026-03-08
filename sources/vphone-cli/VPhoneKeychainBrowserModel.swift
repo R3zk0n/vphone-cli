@@ -14,6 +14,7 @@ class VPhoneKeychainBrowserModel {
     var selection = Set<VPhoneKeychainItem.ID>()
     var sortOrder = [KeyPathComparator(\VPhoneKeychainItem.displayName)]
     var filterClass: String?
+    var showDiagnostics = false
 
     init(control: VPhoneControl) {
         self.control = control
@@ -34,6 +35,7 @@ class VPhoneKeychainBrowserModel {
                     || $0.label.lowercased().contains(query)
                     || $0.accessGroup.lowercased().contains(query)
                     || $0.server.lowercased().contains(query)
+                    || $0.protection.lowercased().contains(query)
                     || $0.value.lowercased().contains(query)
             }
         }
@@ -67,7 +69,7 @@ class VPhoneKeychainBrowserModel {
     func addTestItem() async {
         do {
             _ = try await control.addKeychainItem()
-            print("[keychain] test item added, refreshing…")
+            print("[keychain] test item added, refreshing...")
             await refresh()
         } catch {
             self.error = "Add failed: \(error)"
