@@ -7,6 +7,8 @@ struct VPhoneFileBrowserView: View {
 
     @State private var showNewFolder = false
     @State private var newFolderName = ""
+    @State private var isEditingPath = false
+    @State private var editablePath = ""
 
     private let controlBarHeight: CGFloat = 24
 
@@ -103,22 +105,34 @@ struct VPhoneFileBrowserView: View {
 
             Divider()
 
-            // Breadcrumbs
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    ForEach(Array(model.breadcrumbs.enumerated()), id: \.offset) { _, crumb in
-                        if crumb.path != "/" || model.breadcrumbs.count == 1 {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 8, weight: .semibold))
-                                .foregroundStyle(.tertiary)
+            // Path — editable text field or clickable breadcrumbs
+            if isEditingPath {
+                TextField("Path", text: $editablePath)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .onSubmit { commitPathEdit() }
+                    .onExitCommand { cancelPathEdit() }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(model.breadcrumbs.enumerated()), id: \.offset) { _, crumb in
+                            if crumb.path != "/" || model.breadcrumbs.count == 1 {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 8, weight: .semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Button(crumb.name) {
+                                model.goToBreadcrumb(crumb.path)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        Button(crumb.name) {
-                            model.goToBreadcrumb(crumb.path)
-                        }
-                        .buttonStyle(.plain)
                     }
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
                 }
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .onTapGesture {
+                    editablePath = model.currentPath
+                    isEditingPath = true
+                }
             }
 
             Divider()
@@ -321,6 +335,19 @@ struct VPhoneFileBrowserView: View {
                 continuation.resume(returning: url)
             }
         }
+    }
+
+    func commitPathEdit() {
+        let path = editablePath.trimmingCharacters(in: .whitespaces)
+        isEditingPath = false
+        guard !path.isEmpty, path.hasPrefix("/") else { return }
+        if path != model.currentPath {
+            model.navigate(to: path)
+        }
+    }
+
+    func cancelPathEdit() {
+        isEditingPath = false
     }
 
     func copyNames(ids: Set<VPhoneRemoteFile.ID>) {
