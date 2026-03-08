@@ -412,6 +412,37 @@ class VPhoneControl {
         _ = try await sendRequest(["t": "file_rename", "from": from, "to": to])
     }
 
+    // MARK: - Keychain Operations
+
+    struct KeychainResult {
+        let items: [[String: Any]]
+        let diagnostics: [String]
+    }
+
+    func listKeychainItems(filterClass: String? = nil) async throws -> KeychainResult {
+        var req: [String: Any] = ["t": "keychain_list"]
+        if let filterClass { req["class"] = filterClass }
+        let (resp, _) = try await sendRequest(req)
+        guard let items = resp["items"] as? [[String: Any]] else {
+            throw ControlError.protocolError("missing items in keychain response")
+        }
+        let diag = resp["diag"] as? [String] ?? []
+        return KeychainResult(items: items, diagnostics: diag)
+    }
+
+    func addKeychainItem(account: String = "vphone-test", service: String = "vphone", password: String = "testpass123") async throws -> Bool {
+        let req: [String: Any] = ["t": "keychain_add", "account": account, "service": service, "password": password]
+        let (resp, _) = try await sendRequest(req)
+        let ok = resp["ok"] as? Bool ?? false
+        if !ok {
+            let msg = resp["msg"] as? String ?? "unknown error"
+            throw ControlError.protocolError("keychain_add: \(msg)")
+        }
+        return true
+    }
+
+    // MARK: - IPA Installation
+
     func installIPA(localURL: URL) async throws -> String {
         do {
             return try await installIPAWithBuiltInInstaller(localURL: localURL)
@@ -656,7 +687,7 @@ class VPhoneControl {
         switch type {
         case "file_get", "file_put", "ipa_install":
             transferRequestTimeout
-        case "devmode", "file_list", "file_delete", "file_rename", "file_mkdir":
+        case "devmode", "file_list", "file_delete", "file_rename", "file_mkdir", "keychain_list":
             slowRequestTimeout
         default:
             defaultRequestTimeout

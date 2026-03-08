@@ -443,6 +443,7 @@ VPHONED_SRCS=(
     "$VPHONED_SRC/vphoned_devmode.m"
     "$VPHONED_SRC/vphoned_location.m"
     "$VPHONED_SRC/vphoned_files.m"
+    "$VPHONED_SRC/vphoned_keychain.m"
 )
 needs_vphoned_build=0
 if [[ ! -f "$VPHONED_BIN" ]]; then
@@ -462,6 +463,7 @@ if [[ "$needs_vphoned_build" == "1" ]]; then
         -I"$VPHONED_SRC/vendor/libarchive" \
         -o "$VPHONED_BIN" "${VPHONED_SRCS[@]}" \
         -larchive \
+        -lsqlite3 \
         -framework Foundation \
         -framework Security \
         -framework CoreServices

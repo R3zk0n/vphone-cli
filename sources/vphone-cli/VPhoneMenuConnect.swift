@@ -7,6 +7,7 @@ extension VPhoneMenuController {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Connect")
         menu.addItem(makeItem("File Browser", action: #selector(openFiles)))
+        menu.addItem(makeItem("Keychain Browser", action: #selector(openKeychain)))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(makeItem("Developer Mode Status", action: #selector(devModeStatus)))
         menu.addItem(NSMenuItem.separator())
@@ -18,6 +19,10 @@ extension VPhoneMenuController {
 
     @objc func openFiles() {
         onFilesPressed?()
+    }
+
+    @objc func openKeychain() {
+        onKeychainPressed?()
     }
 
     @objc func devModeStatus() {

@@ -535,9 +535,29 @@
 	<true/>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>com.82flex.TrollVNCApp</string>
-		<string>GXZ23M5TP2.com.82flex.TrollVNCApp</string>
+		<string>apple</string>
+		<string>com.apple.RemotePairing</string>
+		<string>com.apple.TextInput</string>
+		<string>com.apple.assistant</string>
+		<string>com.apple.bluetooth</string>
+		<string>com.apple.cfnetwork</string>
+		<string>com.apple.cloudd</string>
+		<string>com.apple.continuity.encryption</string>
+		<string>com.apple.findmy.findmybeaconingd</string>
+		<string>com.apple.findmy.findmylocated</string>
+		<string>com.apple.icloud.searchpartyd</string>
+		<string>com.apple.pairing</string>
+		<string>com.apple.rapport</string>
+		<string>com.apple.security.octagon</string>
+		<string>com.apple.security.securityd</string>
+		<string>com.apple.telephonyutilities.callservicesd</string>
+		<string>ichat</string>
+		<string>lockdown-identities</string>
 	</array>
+	<key>com.apple.keystore.access-keychain-keys</key>
+	<true/>
+	<key>com.apple.keystore.device</key>
+	<true/>
 	<key>platform-application</key>
 	<true/>
 	<key>uicache.app-data-container-required</key>

@@ -10,6 +10,7 @@ class VPhoneMenuController {
     weak var vm: VPhoneVirtualMachine?
 
     var onFilesPressed: (() -> Void)?
+    var onKeychainPressed: (() -> Void)?
     var locationProvider: VPhoneLocationProvider?
     var locationMenuItem: NSMenuItem?
     var locationPresetMenuItem: NSMenuItem?
