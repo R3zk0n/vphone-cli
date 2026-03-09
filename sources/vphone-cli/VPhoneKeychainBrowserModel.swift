@@ -80,6 +80,10 @@ class VPhoneKeychainBrowserModel {
     // MARK: - Refresh
 
     func refresh() async {
+        guard control.isConnected else {
+            error = "Waiting for vphoned connection…"
+            return
+        }
         isLoading = true
         error = nil
         do {

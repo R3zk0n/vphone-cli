@@ -20,6 +20,11 @@ struct VPhoneKeychainBrowserView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await model.refresh() }
+        .onChange(of: model.control.isConnected) { _, connected in
+            if connected, model.items.isEmpty {
+                Task { await model.refresh() }
+            }
+        }
         .alert(
             "Error",
             isPresented: .init(

@@ -53,7 +53,7 @@ struct VPhoneFileBrowserView: View {
         Table(of: VPhoneRemoteFile.self, selection: $model.selection, sortOrder: $model.sortOrder) {
             TableColumn("", value: \.name) { file in
                 Image(systemName: file.icon)
-                    .foregroundStyle(file.isDirectory ? .blue : .secondary)
+                    .foregroundStyle(file.isDirectoryLike ? .blue : .secondary)
                     .frame(width: 20)
             }
             .width(28)
@@ -74,7 +74,7 @@ struct VPhoneFileBrowserView: View {
             TableColumn("Size", value: \.size) { file in
                 Text(file.displaySize)
                     .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(file.isDirectory ? .secondary : .primary)
+                    .foregroundStyle(file.isDirectoryLike ? .secondary : .primary)
             }
             .width(min: 50, ideal: 80, max: .infinity)
 
