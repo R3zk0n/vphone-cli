@@ -10,7 +10,9 @@ class VPhoneMenuController {
     weak var vm: VPhoneVirtualMachine?
 
     var onFilesPressed: (() -> Void)?
+    var onKeychainPressed: (() -> Void)?
     var connectFileBrowserItem: NSMenuItem?
+    var connectKeychainBrowserItem: NSMenuItem?
     var connectDevModeStatusItem: NSMenuItem?
     var connectPingItem: NSMenuItem?
     var connectGuestVersionItem: NSMenuItem?

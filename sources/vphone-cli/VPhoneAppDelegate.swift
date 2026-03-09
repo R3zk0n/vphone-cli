@@ -9,6 +9,7 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
     private var windowController: VPhoneWindowController?
     private var menuController: VPhoneMenuController?
     private var fileWindowController: VPhoneFileWindowController?
+    private var keychainWindowController: VPhoneKeychainWindowController?
     private var locationProvider: VPhoneLocationProvider?
     private var sigintSource: DispatchSourceSignal?
 
@@ -126,12 +127,19 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
             let fileWC = VPhoneFileWindowController()
             fileWindowController = fileWC
 
+            let keychainWC = VPhoneKeychainWindowController()
+            keychainWindowController = keychainWC
+
             let mc = VPhoneMenuController(keyHelper: keyHelper, control: control)
             mc.vm = vm
             mc.captureView = wc.captureView
             mc.onFilesPressed = { [weak fileWC, weak control] in
                 guard let fileWC, let control else { return }
                 fileWC.showWindow(control: control)
+            }
+            mc.onKeychainPressed = { [weak keychainWC, weak control] in
+                guard let keychainWC, let control else { return }
+                keychainWC.showWindow(control: control)
             }
             if let provider = locationProvider {
                 mc.locationProvider = provider

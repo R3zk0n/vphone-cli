@@ -6,11 +6,17 @@ extension VPhoneMenuController {
     func buildConnectMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Connect")
+        menu.autoenablesItems = false
 
         let fileBrowser = makeItem("File Browser", action: #selector(openFiles))
         fileBrowser.isEnabled = false
         connectFileBrowserItem = fileBrowser
         menu.addItem(fileBrowser)
+
+        let keychainBrowser = makeItem("Keychain Browser", action: #selector(openKeychain))
+        keychainBrowser.isEnabled = false
+        connectKeychainBrowserItem = keychainBrowser
+        menu.addItem(keychainBrowser)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -37,6 +43,7 @@ extension VPhoneMenuController {
 
     func updateConnectAvailability(available: Bool) {
         connectFileBrowserItem?.isEnabled = available
+        connectKeychainBrowserItem?.isEnabled = available
         connectDevModeStatusItem?.isEnabled = available
         connectPingItem?.isEnabled = available
         connectGuestVersionItem?.isEnabled = available
@@ -44,6 +51,10 @@ extension VPhoneMenuController {
 
     @objc func openFiles() {
         onFilesPressed?()
+    }
+
+    @objc func openKeychain() {
+        onKeychainPressed?()
     }
 
     @objc func devModeStatus() {

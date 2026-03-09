@@ -18,6 +18,7 @@ $(OUT): $(SRCS) $(wildcard *.h)
 		-DVPHONED_BUILD_HASH='"$(GIT_HASH)"' \
 		-o $@ $(SRCS) \
 		-larchive \
+		-lsqlite3 \
 		-framework Foundation \
 		-framework Security \
 		-framework CoreServices

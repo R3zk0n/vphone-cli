@@ -26,6 +26,7 @@
 #import "vphoned_location.h"
 #import "vphoned_files.h"
 #import "vphoned_install.h"
+#import "vphoned_keychain.h"
 
 #ifndef AF_VSOCK
 #define AF_VSOCK 40
@@ -254,7 +255,7 @@ static BOOL handle_client(int fd) {
         }
 
         // Build capabilities list
-        NSMutableArray *caps = [NSMutableArray arrayWithObjects:@"hid", @"devmode", @"file", nil];
+        NSMutableArray *caps = [NSMutableArray arrayWithObjects:@"hid", @"devmode", @"file", @"keychain", nil];
         if (vp_location_available()) [caps addObject:@"location"];
         if (vp_custom_installer_available()) [caps addObject:@"ipa_install"];
 
@@ -297,6 +298,13 @@ static BOOL handle_client(int fd) {
                 // File operations (need fd for inline binary transfer)
                 if ([t hasPrefix:@"file_"]) {
                     NSDictionary *resp = vp_handle_file_command(fd, msg);
+                    if (resp && !vp_write_message(fd, resp)) break;
+                    continue;
+                }
+
+                // Keychain operations
+                if ([t hasPrefix:@"keychain_"]) {
+                    NSDictionary *resp = vp_handle_keychain_command(msg);
                     if (resp && !vp_write_message(fd, resp)) break;
                     continue;
                 }
