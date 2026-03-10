@@ -671,11 +671,11 @@ class VPhoneControl {
         let timeout = Self.handshakeTimeout
         DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
             guard let self else { return }
-            guard self.isCurrentAttempt(attemptToken, fd: fd) else { return }
-            guard !self.isConnected else { return }
+            guard isCurrentAttempt(attemptToken, fd: fd) else { return }
+            guard !isConnected else { return }
             print("[control] handshake timed out after \(Int(timeout.rounded()))s")
             Self.shutdownSocket(fd: fd)
-            self.disconnect(ifCurrentAttempt: attemptToken)
+            disconnect(ifCurrentAttempt: attemptToken)
         }
     }
 

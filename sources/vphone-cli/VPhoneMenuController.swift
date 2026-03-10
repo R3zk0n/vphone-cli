@@ -16,6 +16,7 @@ class VPhoneMenuController {
     var connectDevModeStatusItem: NSMenuItem?
     var connectPingItem: NSMenuItem?
     var connectGuestVersionItem: NSMenuItem?
+    var installPackageItem: NSMenuItem?
     var locationProvider: VPhoneLocationProvider?
     var locationMenuItem: NSMenuItem?
     var locationPresetMenuItem: NSMenuItem?

@@ -7,9 +7,18 @@ extension VPhoneMenuController {
     func buildInstallMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Install")
-        menu.addItem(makeItem("Install IPA/TIPA...", action: #selector(installIPAFromDisk)))
+        menu.autoenablesItems = false
+
+        let install = makeItem("Install IPA/TIPA...", action: #selector(installIPAFromDisk))
+        install.isEnabled = false
+        installPackageItem = install
+        menu.addItem(install)
         item.submenu = menu
         return item
+    }
+
+    func updateInstallAvailability(available: Bool) {
+        installPackageItem?.isEnabled = available
     }
 
     @objc func installIPAFromDisk() {
