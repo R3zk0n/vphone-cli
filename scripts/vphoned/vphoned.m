@@ -31,7 +31,6 @@
 #import "vphoned_location.h"
 #import "vphoned_protocol.h"
 #import "vphoned_settings.h"
-#import "vphoned_shared_cache.h"
 #import "vphoned_url.h"
 
 #ifndef AF_VSOCK
@@ -288,7 +287,6 @@ static BOOL handle_client(int fd) {
       [caps addObject:@"apps"];
     [caps addObject:@"url"];
     [caps addObject:@"settings"];
-    [caps addObject:@"cache"];
 
     NSMutableDictionary *helloResp = [@{
       @"v" : @PROTOCOL_VERSION,
@@ -373,14 +371,6 @@ static BOOL handle_client(int fd) {
         // Settings operations
         if ([t hasPrefix:@"settings_"]) {
           NSDictionary *resp = vp_handle_settings_command(msg);
-          if (resp && !vp_write_message(fd, resp))
-            break;
-          continue;
-        }
-
-        // Shared cache operations (need fd for inline binary transfer)
-        if ([t hasPrefix:@"cache_"]) {
-          NSDictionary *resp = vp_handle_cache_command(fd, msg);
           if (resp && !vp_write_message(fd, resp))
             break;
           continue;

@@ -16,6 +16,8 @@ struct VPhoneKeychainItem: Identifiable, Hashable {
     let rowid: Int
     let created: Date?
     let modified: Date?
+    let isPreDecrypted: Bool
+    let source: String
 
     var displayClass: String {
         switch itemClass {
@@ -39,13 +41,34 @@ struct VPhoneKeychainItem: Identifiable, Hashable {
         }
     }
 
+    /// Whether the sqlite value is an encrypted container (needs SecItemCopyMatching to decrypt).
+    var isEncrypted: Bool {
+        valueEncoding == "encrypted"
+    }
+
+    /// Whether the value was successfully decoded to something readable.
+    var isDecoded: Bool {
+        !value.isEmpty && !isEncrypted && valueEncoding != "base64"
+    }
+
+    /// Lock state icon for the value column.
+    var valueStateIcon: String {
+        if isEncrypted { return "lock.fill" }
+        if value.isEmpty { return "minus.circle" }
+        if valueEncoding == "base64" { return "doc.questionmark" }
+        return "lock.open.fill"
+    }
+
     var displayValue: String {
         if value.isEmpty { return "-" }
+        if isEncrypted {
+            let sizeStr = ByteCountFormatter.string(fromByteCount: Int64(valueSize), countStyle: .file)
+            return "[\(valueType ?? "encrypted") \(sizeStr)]"
+        }
         if valueEncoding == "base64" {
             return "[\(ByteCountFormatter.string(fromByteCount: Int64(valueSize), countStyle: .file)) binary]"
         }
         if valueEncoding == "json" {
-            // Truncate long JSON for table display
             if value.count > 80 {
                 return String(value.prefix(77)) + "..."
             }
@@ -54,7 +77,8 @@ struct VPhoneKeychainItem: Identifiable, Hashable {
     }
 
     var valueTypeLabel: String {
-        valueType ?? (valueEncoding == "base64" ? "binary" : "text")
+        if isEncrypted { return valueType ?? "encrypted" }
+        return valueType ?? (valueEncoding == "base64" ? "binary" : "text")
     }
 
     var displayName: String {
@@ -143,5 +167,7 @@ extension VPhoneKeychainItem {
         let rid = (entry["_rowid"] as? NSNumber)?.intValue ?? index
         rowid = rid
         id = "\(cls)-\(rid)"
+        isPreDecrypted = (entry["decrypted"] as? Bool) == true
+        source = entry["source"] as? String ?? "sqlite"
     }
 }

@@ -72,10 +72,19 @@ class VPhoneKeychainBrowserModel {
     var isGettingValue = false
 
     func getValue(for item: VPhoneKeychainItem) async {
-        isGettingValue = true
         selectedItem = item
         selectedItemValue = nil
         selectedItemValueType = nil
+
+        // If the item was already decrypted by SecAPI in the listing, show the value directly
+        if item.isPreDecrypted && !item.value.isEmpty && !item.isEncrypted {
+            selectedItemValue = item.value
+            selectedItemValueType = item.valueType
+            diagnostics.append("value already decrypted (from SecAPI listing)")
+            return
+        }
+
+        isGettingValue = true
         do {
             let result = try await control.keychainGetValue(
                 itemClass: item.itemClass,

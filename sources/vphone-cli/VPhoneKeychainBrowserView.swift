@@ -92,12 +92,20 @@ struct VPhoneKeychainBrowserView: View {
             .width(min: 40, ideal: 60, max: 80)
 
             TableColumn("Value", value: \.value) { item in
-                Text(item.displayValue)
-                    .font(.system(.body, design: .monospaced))
-                    .lineLimit(1)
-                    .help(item.displayValue)
+                HStack(spacing: 4) {
+                    Image(systemName: item.valueStateIcon)
+                        .font(.system(size: 10))
+                        .foregroundStyle(item.isEncrypted ? .orange : item.isDecoded ? .green : .secondary)
+                        .frame(width: 14)
+                        .help(item.valueTypeLabel)
+                    Text(item.displayValue)
+                        .font(.system(.body, design: .monospaced))
+                        .lineLimit(1)
+                        .foregroundStyle(item.isEncrypted ? .secondary : .primary)
+                }
+                .help(item.isEncrypted ? "Encrypted: \(item.valueTypeLabel) — right-click to decrypt via SecItemCopyMatching" : item.displayValue)
             }
-            .width(min: 60, ideal: 120, max: .infinity)
+            .width(min: 60, ideal: 180, max: .infinity)
 
             TableColumn("Modified", value: \.displayName) { item in
                 Text(item.displayDate)
@@ -316,7 +324,7 @@ struct VPhoneKeychainBrowserView: View {
     @ViewBuilder
     func contextMenu(for ids: Set<VPhoneKeychainItem.ID>) -> some View {
         if ids.count == 1, let item = model.filteredItems.first(where: { ids.contains($0.id) }) {
-            Button("Get Decrypted Value") {
+            Button(item.isPreDecrypted ? "View Value" : "Get Decrypted Value") {
                 Task { await model.getValue(for: item) }
             }
             Divider()

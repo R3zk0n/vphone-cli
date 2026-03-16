@@ -689,81 +689,6 @@ class VPhoneControl {
         _ = try await sendRequest(req)
     }
 
-    // MARK: - Shared Cache
-
-    struct CacheFile {
-        let name: String
-        let path: String
-        let size: UInt64
-    }
-
-    struct CacheImage {
-        let path: String
-        let address: String
-        let index: Int
-    }
-
-    func cacheList() async throws -> [CacheFile] {
-        let (resp, _) = try await sendRequest(["t": "cache_list"])
-        guard let caches = resp["caches"] as? [[String: Any]] else {
-            throw ControlError.protocolError("missing caches in response")
-        }
-        return caches.map { c in
-            CacheFile(
-                name: c["name"] as? String ?? "",
-                path: c["path"] as? String ?? "",
-                size: (c["size"] as? NSNumber)?.uint64Value ?? 0
-            )
-        }
-    }
-
-    func cacheImages(path: String) async throws -> (magic: String, images: [CacheImage]) {
-        let (resp, _) = try await sendRequest(["t": "cache_images", "path": path])
-        let magic = resp["magic"] as? String ?? ""
-        guard let images = resp["images"] as? [[String: Any]] else {
-            throw ControlError.protocolError("missing images in response")
-        }
-        return (magic, images.map { img in
-            CacheImage(
-                path: img["path"] as? String ?? "",
-                address: img["address"] as? String ?? "",
-                index: img["index"] as? Int ?? 0
-            )
-        })
-    }
-
-    func cacheSearch(path: String, query: String, limit: Int = 50) async throws -> (total: Int, images: [CacheImage]) {
-        let (resp, _) = try await sendRequest(["t": "cache_search", "path": path, "query": query, "limit": limit])
-        let total = resp["total"] as? Int ?? 0
-        guard let images = resp["images"] as? [[String: Any]] else {
-            throw ControlError.protocolError("missing images in search response")
-        }
-        return (total, images.map { img in
-            CacheImage(
-                path: img["path"] as? String ?? "",
-                address: img["address"] as? String ?? "",
-                index: img["index"] as? Int ?? 0
-            )
-        })
-    }
-
-    func cacheExtract(path: String, index: Int) async throws -> (imagePath: String, data: Data) {
-        let (resp, data) = try await sendRequest(["t": "cache_extract", "path": path, "index": index])
-        guard let data else {
-            throw ControlError.protocolError("no cache data received")
-        }
-        let imagePath = resp["image_path"] as? String ?? ""
-        return (imagePath, data)
-    }
-
-    func cacheDownload(path: String) async throws -> Data {
-        let (_, data) = try await sendRequest(["t": "cache_download", "path": path])
-        guard let data else {
-            throw ControlError.protocolError("no cache file data received")
-        }
-        return data
-    }
-
     // MARK: - Accessibility
 
     func accessibilityTree(depth: Int = -1) async throws -> [String: Any] {
@@ -884,27 +809,6 @@ class VPhoneControl {
                         continue
                     }
 
-                    // For cache_data, read inline binary payload
-                    if type == "cache_data" {
-                        let size = msg["size"] as? Int ?? 0
-                        if size > 0 {
-                            let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
-                            if Self.readFully(fd: fd, buf: buf, count: size) {
-                                let data = Data(bytes: buf, count: size)
-                                buf.deallocate()
-                                DispatchQueue.main.async { pending.handler(.success((safeMsg, data))) }
-                            } else {
-                                buf.deallocate()
-                                DispatchQueue.main.async {
-                                    pending.handler(.failure(ControlError.protocolError("failed to read cache data")))
-                                }
-                            }
-                        } else {
-                            DispatchQueue.main.async { pending.handler(.success((safeMsg, Data()))) }
-                        }
-                        continue
-                    }
-
                     // For clipboard_get with image, read inline binary payload
                     if type == "clipboard_get", msg["has_image"] as? Bool == true {
                         let size = msg["image_size"] as? Int ?? 0
@@ -1009,11 +913,10 @@ class VPhoneControl {
 
     private static func timeoutForRequest(type: String) -> TimeInterval {
         switch type {
-        case "file_get", "file_put", "ipa_install", "cache_extract", "cache_download":
+        case "file_get", "file_put", "ipa_install":
             transferRequestTimeout
         case "devmode", "file_list", "file_delete", "file_rename", "file_mkdir", "keychain_list",
-             "app_list", "app_launch", "open_url", "accessibility_tree",
-             "cache_list", "cache_images", "cache_search":
+             "app_list", "app_launch", "open_url", "accessibility_tree":
             slowRequestTimeout
         default:
             defaultRequestTimeout

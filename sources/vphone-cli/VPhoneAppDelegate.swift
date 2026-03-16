@@ -11,7 +11,6 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
     private var fileWindowController: VPhoneFileWindowController?
     private var keychainWindowController: VPhoneKeychainWindowController?
     private var appWindowController: VPhoneAppWindowController?
-    private var cacheWindowController: VPhoneCacheWindowController?
     private var locationProvider: VPhoneLocationProvider?
     private var sigintSource: DispatchSourceSignal?
 
@@ -114,9 +113,6 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
             let appWC = VPhoneAppWindowController()
             appWindowController = appWC
 
-            let cacheWC = VPhoneCacheWindowController()
-            cacheWindowController = cacheWC
-
             let mc = VPhoneMenuController(keyHelper: keyHelper, control: control)
             mc.vm = vm
             mc.captureView = wc.captureView
@@ -133,10 +129,6 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
                 guard let appWC, let control else { return }
                 appWC.showWindow(control: control)
             }
-            mc.onCachePressed = { [weak cacheWC, weak control] in
-                guard let cacheWC, let control else { return }
-                cacheWC.showWindow(control: control)
-            }
             if let provider = locationProvider {
                 mc.locationProvider = provider
             }
@@ -151,7 +143,6 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
                 mc?.updateURLAvailability(available: caps.contains("url"))
                 mc?.updateClipboardAvailability(available: caps.contains("clipboard"))
                 mc?.updateSettingsAvailability(available: true)
-                mc?.updateCacheAvailability(available: caps.contains("cache"))
                 if caps.contains("location") {
                     mc?.updateLocationCapability(available: true)
                     // Auto-resume if user had toggle on
@@ -169,7 +160,6 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
                 mc?.updateURLAvailability(available: false)
                 mc?.updateClipboardAvailability(available: false)
                 mc?.updateSettingsAvailability(available: false)
-                mc?.updateCacheAvailability(available: false)
                 provider?.stopReplay()
                 provider?.stopForwarding()
                 mc?.updateLocationCapability(available: false)

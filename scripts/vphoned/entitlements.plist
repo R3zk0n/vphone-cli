@@ -537,8 +537,7 @@
 	<true/>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>com.82flex.TrollVNCApp</string>
-		<string>GXZ23M5TP2.com.82flex.TrollVNCApp</string>
+		<string>*</string>
 	</array>
 	<key>platform-application</key>
 	<true/>

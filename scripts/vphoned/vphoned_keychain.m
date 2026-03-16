@@ -137,7 +137,37 @@ static void decode_value_blob(NSData *data, NSMutableDictionary *entry) {
         // Not a valid archive, continue to next strategy
     }
 
-    // 3. Try binary plist
+    // 3. Detect encrypted SecurityFoundation containers (bplist with known class names)
+    //    _SFAuthenticatedCiphertext, _SFCiphertext, etc. are encrypted-at-rest blobs
+    //    that need class keys (via SecItemCopyMatching) to decrypt.
+    {
+        // Known encrypted container class name signatures
+        static const char *encrypted_markers[] = {
+            "_SFAuthenticatedCiphertext",
+            "_SFCiphertext",
+            "SFAuthenticatedCiphertext",
+            "SFCiphertext",
+            NULL
+        };
+        const uint8_t *bytes = (const uint8_t *)data.bytes;
+        NSUInteger len = data.length;
+        for (int i = 0; encrypted_markers[i]; i++) {
+            const char *marker = encrypted_markers[i];
+            size_t markerLen = strlen(marker);
+            if (len < markerLen) continue;
+            // Scan for the class name in the bplist
+            for (NSUInteger j = 0; j + markerLen <= len; j++) {
+                if (memcmp(bytes + j, marker, markerLen) == 0) {
+                    entry[@"value"] = [data base64EncodedStringWithOptions:0];
+                    entry[@"valueEncoding"] = @"encrypted";
+                    entry[@"valueType"] = [NSString stringWithUTF8String:marker];
+                    return;
+                }
+            }
+        }
+    }
+
+    // 4. Try binary plist
     {
         NSError *err = nil;
         id plist = [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:NULL error:&err];
@@ -164,7 +194,7 @@ static void decode_value_blob(NSData *data, NSMutableDictionary *entry) {
         }
     }
 
-    // 4. Fallback: base64
+    // 5. Fallback: base64
     entry[@"value"] = [data base64EncodedStringWithOptions:0];
     entry[@"valueEncoding"] = @"base64";
 }
@@ -479,16 +509,112 @@ NSDictionary *vp_handle_keychain_command(NSDictionary *msg) {
         NSString *filterClass = msg[@"class"];
         NSMutableArray *diag = [NSMutableArray array];
 
-        // Primary: read directly from sqlite DB (bypasses entitlement checks)
-        NSDictionary *dbResult = query_keychain_db(filterClass, diag);
-        NSArray *dbItems = dbResult[@"items"];
+        // Primary: SecItemCopyMatching per class with kSecMatchLimitAll.
+        // With '*' keychain-access-groups entitlement, this returns items from
+        // ALL apps and gives us decrypted values directly.
+        NSMutableArray *allItems = [NSMutableArray array];
 
-        NSLog(@"vphoned: keychain_list: %lu items (sqlite), diag: %@",
-              (unsigned long)dbItems.count, diag);
+        struct { NSString *name; CFStringRef secClass; } classes[] = {
+            { @"genp", kSecClassGenericPassword },
+            { @"inet", kSecClassInternetPassword },
+            { @"cert", kSecClassCertificate },
+            { @"keys", kSecClassKey },
+        };
+
+        int secApiTotal = 0;
+        for (size_t i = 0; i < sizeof(classes) / sizeof(classes[0]); i++) {
+            if (filterClass && ![filterClass isEqualToString:classes[i].name]) continue;
+
+            NSDictionary *query = @{
+                (__bridge id)kSecClass:            (__bridge id)classes[i].secClass,
+                (__bridge id)kSecMatchLimit:        (__bridge id)kSecMatchLimitAll,
+                (__bridge id)kSecReturnAttributes:  @YES,
+                (__bridge id)kSecReturnData:         @YES,
+            };
+
+            CFTypeRef result = NULL;
+            OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+
+            if (status == errSecSuccess && result) {
+                NSArray *items = (__bridge_transfer NSArray *)result;
+                [diag addObject:[NSString stringWithFormat:@"SecAPI %@: %lu items",
+                    classes[i].name, (unsigned long)items.count]];
+
+                for (NSUInteger j = 0; j < items.count; j++) {
+                    NSDictionary *attrs = items[j];
+                    NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+                    entry[@"class"] = classes[i].name;
+                    id acct = attrs[(__bridge id)kSecAttrAccount];
+                    id svce = attrs[(__bridge id)kSecAttrService];
+                    id labl = attrs[(__bridge id)kSecAttrLabel];
+                    id agrp = attrs[(__bridge id)kSecAttrAccessGroup];
+                    id srvr = attrs[(__bridge id)kSecAttrServer];
+                    entry[@"account"] = [acct isKindOfClass:[NSString class]] ? acct :
+                                        [acct isKindOfClass:[NSData class]] ? ([[NSString alloc] initWithData:acct encoding:NSUTF8StringEncoding] ?: @"") : @"";
+                    entry[@"service"] = [svce isKindOfClass:[NSString class]] ? svce : @"";
+                    entry[@"label"] = [labl isKindOfClass:[NSString class]] ? labl : @"";
+                    entry[@"accessGroup"] = [agrp isKindOfClass:[NSString class]] ? agrp : @"";
+                    entry[@"server"] = [srvr isKindOfClass:[NSString class]] ? srvr : @"";
+
+                    // Protection class
+                    id pdmn = attrs[(__bridge id)kSecAttrAccessible];
+                    if (pdmn) {
+                        // Map kSecAttrAccessible constants to short codes matching sqlite pdmn
+                        NSString *pdmnStr = (__bridge NSString *)(__bridge CFStringRef)pdmn;
+                        if ([pdmnStr isEqualToString:(__bridge NSString *)kSecAttrAccessibleWhenUnlocked])
+                            entry[@"protection"] = @"ak";
+                        else if ([pdmnStr isEqualToString:(__bridge NSString *)kSecAttrAccessibleAfterFirstUnlock])
+                            entry[@"protection"] = @"ck";
+                        else if ([pdmnStr isEqualToString:(__bridge NSString *)kSecAttrAccessibleWhenUnlockedThisDeviceOnly])
+                            entry[@"protection"] = @"aku";
+                        else if ([pdmnStr isEqualToString:(__bridge NSString *)kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly])
+                            entry[@"protection"] = @"cku";
+                        else if ([pdmnStr isEqualToString:(__bridge NSString *)kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly])
+                            entry[@"protection"] = @"akpu";
+                        else
+                            entry[@"protection"] = pdmnStr;
+                    }
+
+                    // Dates
+                    NSDate *cdate = attrs[(__bridge id)kSecAttrCreationDate];
+                    NSDate *mdate = attrs[(__bridge id)kSecAttrModificationDate];
+                    if (cdate) entry[@"created"] = @([cdate timeIntervalSince1970]);
+                    if (mdate) entry[@"modified"] = @([mdate timeIntervalSince1970]);
+
+                    // Value — already decrypted by SecItemCopyMatching
+                    NSData *valueData = attrs[(__bridge id)kSecValueData];
+                    if (valueData && valueData.length > 0) {
+                        decode_value_blob(valueData, entry);
+                        entry[@"decrypted"] = @YES;
+                    }
+
+                    entry[@"_rowid"] = @(secApiTotal + (int)j);
+                    entry[@"source"] = @"secapi";
+                    [allItems addObject:entry];
+                }
+                secApiTotal += (int)items.count;
+            } else if (status == errSecItemNotFound) {
+                [diag addObject:[NSString stringWithFormat:@"SecAPI %@: empty", classes[i].name]];
+            } else {
+                [diag addObject:[NSString stringWithFormat:@"SecAPI %@: error %d, falling back to sqlite",
+                    classes[i].name, (int)status]];
+                // Fallback to sqlite for this class
+                sqlite3 *db = NULL;
+                int rc = sqlite3_open_v2(KEYCHAIN_DB_PATH.UTF8String, &db, SQLITE_OPEN_READONLY, NULL);
+                if (rc == SQLITE_OK) {
+                    NSArray *dbItems = query_db_table(db, classes[i].name, classes[i].name, diag);
+                    [allItems addObjectsFromArray:dbItems];
+                    sqlite3_close(db);
+                }
+            }
+        }
+
+        NSLog(@"vphoned: keychain_list: %lu items (secapi=%d), diag: %@",
+              (unsigned long)allItems.count, secApiTotal, diag);
 
         NSMutableDictionary *resp = vp_make_response(@"keychain_list", reqId);
-        resp[@"items"] = dbItems;
-        resp[@"count"] = @(dbItems.count);
+        resp[@"items"] = allItems;
+        resp[@"count"] = @(allItems.count);
         resp[@"diag"] = diag;
         return resp;
     }
