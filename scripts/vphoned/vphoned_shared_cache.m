@@ -105,6 +105,9 @@ struct cache_ctx {
     size_t                   mainSize;
 };
 
+// Forward declaration
+static void *map_cache(const char *path, size_t *out_size);
+
 /// Open the main cache + all subcache files, build unified mapping table.
 /// `mainPath` should be the base cache file (e.g. dyld_shared_cache_arm64e).
 /// Returns YES on success.
