@@ -6,30 +6,53 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-// dyld_cache_header — subset of fields we need (stable across iOS versions)
+// dyld_cache_header — full layout from dyld source
 struct dyld_cache_header {
-    char magic[16];
-    uint32_t mappingOffset;
-    uint32_t mappingCount;
-    uint32_t imagesOffsetOld;      // pre-iOS 13 image info offset
-    uint32_t imagesCountOld;       // pre-iOS 13 image count
-    uint64_t dyldBaseAddress;
-    uint64_t pad1[3];
-    uint64_t slideInfoOffsetUnused;
-    uint64_t slideInfoSizeUnused;
-    uint64_t localSymbolsOffset;
-    uint64_t localSymbolsSize;
-    char uuid[16];
-    uint64_t cacheType;
-    uint32_t branchPoolsOffset;
-    uint32_t branchPoolsCount;
-    uint64_t pad2[4];
-    uint64_t imagesTextOffset;     // offset to dyld_cache_image_text_info array
-    uint64_t imagesTextCount;      // count of dyld_cache_image_text_info entries
-    uint64_t pad3[2];
-    uint64_t pad4[2];
-    uint32_t imagesOffset;         // offset to dyld_cache_image_info array (modern)
-    uint32_t imagesCount;          // count of dyld_cache_image_info entries (modern)
+    char        magic[16];                  // e.g. "dyld_v0  i386"
+    uint32_t    mappingOffset;              // file offset to first dyld_cache_mapping_info
+    uint32_t    mappingCount;               // number of dyld_cache_mapping_info entries
+    uint32_t    imagesOffset;               // file offset to first dyld_cache_image_info
+    uint32_t    imagesCount;                // number of dyld_cache_image_info entries
+    uint64_t    dyldBaseAddress;            // base address of dyld when cache was built
+    uint64_t    codeSignatureOffset;        // file offset of code signature blob
+    uint64_t    codeSignatureSize;          // size of code signature blob (zero means to end of file)
+    uint64_t    slideInfoOffset;            // file offset of kernel slid info
+    uint64_t    slideInfoSize;              // size of kernel slid info
+    uint64_t    localSymbolsOffset;         // file offset of where local symbols are stored
+    uint64_t    localSymbolsSize;           // size of local symbols information
+    uint8_t     uuid[16];                   // unique value for each shared cache file
+    uint64_t    cacheType;                  // 0 for development, 1 for production
+    uint32_t    branchPoolsOffset;          // file offset to table of uint64_t pool addresses
+    uint32_t    branchPoolsCount;           // number of uint64_t entries
+    uint64_t    accelerateInfoAddr;         // (unslid) address of optimization info
+    uint64_t    accelerateInfoSize;         // size of optimization info
+    uint64_t    imagesTextOffset;           // file offset to first dyld_cache_image_text_info
+    uint64_t    imagesTextCount;            // number of dyld_cache_image_text_info entries
+    uint64_t    dylibsImageGroupAddr;       // (unslid) address of ImageGroup for dylibs in this cache
+    uint64_t    dylibsImageGroupSize;       // size of ImageGroup for dylibs in this cache
+    uint64_t    otherImageGroupAddr;        // (unslid) address of ImageGroup for other OS dylibs
+    uint64_t    otherImageGroupSize;        // size of ImageGroup for other OS dylibs
+    uint64_t    progClosuresAddr;           // (unslid) address of list of program launch closures
+    uint64_t    progClosuresSize;           // size of list of program launch closures
+    uint64_t    progClosuresTrieAddr;       // (unslid) address of trie of indexes into program launch closures
+    uint64_t    progClosuresTrieSize;       // size of trie of indexes into program launch closures
+    uint32_t    platform;                   // platform number (macOS=1, etc)
+    uint32_t    formatVersion       : 8,    // launch_cache::binary_format::kFormatVersion
+                dylibsExpectedOnDisk: 1,    // dyld should expect the dylib exists on disk and to compare inode/mtime
+                simulator           : 1,    // for simulator of specified platform
+                _padding            : 22;
+    uint64_t    sharedRegionStart;          // base load address of cache if not slid
+    uint64_t    sharedRegionSize;           // overall size of region cache can be mapped into
+    uint64_t    maxSlide;                   // runtime slide of cache can be between zero and this value
+    // Darwin 18+:
+    uint64_t    dylibsImageArrayAddr;       // (unslid) address of ImageArray for dylibs in this cache
+    uint64_t    dylibsImageArraySize;       // size of ImageArray for dylibs in this cache
+    uint64_t    dylibsTrieAddr;             // (unslid) address of trie of indexes of all cached dylibs
+    uint64_t    dylibsTrieSize;             // size of trie of cached dylib paths
+    uint64_t    otherImageArrayAddr;        // (unslid) address of ImageArray for dylibs/bundles with dlopen closures
+    uint64_t    otherImageArraySize;        // size of ImageArray for dylibs/bundles with dlopen closures
+    uint64_t    otherTrieAddr;              // (unslid) address of trie of indexes of all dylibs/bundles with dlopen closures
+    uint64_t    otherTrieSize;              // size of trie of dylibs/bundles with dlopen closures
 };
 
 struct dyld_cache_mapping_info {
@@ -98,13 +121,8 @@ static void *map_cache(const char *path, size_t *out_size) {
 static NSArray<NSDictionary *> *list_images(void *base, size_t size) {
     struct dyld_cache_header *hdr = (struct dyld_cache_header *)base;
 
-    // Use modern fields if available, fall back to old
     uint32_t count = hdr->imagesCount;
     uint32_t offset = hdr->imagesOffset;
-    if (count == 0) {
-        count = hdr->imagesCountOld;
-        offset = hdr->imagesOffsetOld;
-    }
     if (count == 0 || offset == 0) return @[];
     if (offset + count * sizeof(struct dyld_cache_image_info) > size) return @[];
 
@@ -337,10 +355,6 @@ NSDictionary *vp_handle_cache_command(int fd, NSDictionary *msg) {
         struct dyld_cache_header *hdr = (struct dyld_cache_header *)base;
         uint32_t count = hdr->imagesCount;
         uint32_t offset = hdr->imagesOffset;
-        if (count == 0) {
-            count = hdr->imagesCountOld;
-            offset = hdr->imagesOffsetOld;
-        }
 
         uint32_t idx = [indexNum unsignedIntValue];
         if (idx >= count || offset + count * sizeof(struct dyld_cache_image_info) > cacheSize) {
