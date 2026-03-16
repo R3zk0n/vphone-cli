@@ -16,7 +16,7 @@ class VPhoneKeychainWindowController {
         self.model = model
 
         let view = VPhoneKeychainBrowserView(model: model)
-        let hostingView = NSHostingView(rootView: view)
+        let hostingController = NSHostingController(rootView: view)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 500),
@@ -26,15 +26,12 @@ class VPhoneKeychainWindowController {
         )
         window.title = "Keychain"
         window.subtitle = "vphone"
-        window.contentView = hostingView
+        window.contentViewController = hostingController
         window.contentMinSize = NSSize(width: 600, height: 300)
+        window.setContentSize(NSSize(width: 900, height: 500))
         window.center()
         window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
-
-        let toolbar = NSToolbar(identifier: "vphone-keychain-toolbar")
-        toolbar.displayMode = .iconOnly
-        window.toolbar = toolbar
 
         window.makeKeyAndOrderFront(nil)
         self.window = window

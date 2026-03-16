@@ -510,10 +510,9 @@ NSDictionary *vp_handle_keychain_command(NSDictionary *msg) {
         NSMutableArray *diag = [NSMutableArray array];
 
         // Two-pass SecItemCopyMatching approach:
-        //   Pass 1: kSecReturnAttributes + kSecMatchLimitAll → enumerate all items
-        //   Pass 2: Per-item kSecReturnData + kSecMatchLimitOne → get decrypted values
-        // iOS blocks bulk kSecReturnData with kSecMatchLimitAll for security reasons,
-        // so we must fetch data one-at-a-time.
+        //   Pass 1: kSecReturnAttributes + kSecReturnPersistentRef + kSecMatchLimitAll
+        //   Pass 2: Per-item kSecValuePersistentRef + kSecReturnData → exact item data
+        // Using persistent refs avoids ambiguity when multiple items share attributes.
         NSMutableArray *allItems = [NSMutableArray array];
 
         struct { NSString *name; CFStringRef secClass; } classes[] = {
@@ -528,11 +527,12 @@ NSDictionary *vp_handle_keychain_command(NSDictionary *msg) {
         for (size_t i = 0; i < sizeof(classes) / sizeof(classes[0]); i++) {
             if (filterClass && ![filterClass isEqualToString:classes[i].name]) continue;
 
-            // Pass 1: Get all attributes (no data)
+            // Pass 1: Get attributes + persistent refs (no data)
             NSDictionary *listQuery = @{
-                (__bridge id)kSecClass:            (__bridge id)classes[i].secClass,
-                (__bridge id)kSecMatchLimit:        (__bridge id)kSecMatchLimitAll,
-                (__bridge id)kSecReturnAttributes:  @YES,
+                (__bridge id)kSecClass:              (__bridge id)classes[i].secClass,
+                (__bridge id)kSecMatchLimit:          (__bridge id)kSecMatchLimitAll,
+                (__bridge id)kSecReturnAttributes:    @YES,
+                (__bridge id)kSecReturnPersistentRef: @YES,
             };
 
             CFTypeRef listResult = NULL;
@@ -601,32 +601,35 @@ NSDictionary *vp_handle_keychain_command(NSDictionary *msg) {
                 if (cdate) entry[@"created"] = @([cdate timeIntervalSince1970]);
                 if (mdate) entry[@"modified"] = @([mdate timeIntervalSince1970]);
 
-                // Pass 2: Fetch decrypted value for this individual item
-                NSMutableDictionary *dataQuery = [NSMutableDictionary dictionary];
-                dataQuery[(__bridge id)kSecClass] = (__bridge id)classes[i].secClass;
-                dataQuery[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
-                dataQuery[(__bridge id)kSecReturnData] = @YES;
+                // Pass 2: Use persistent ref to fetch decrypted data for this exact item
+                NSData *persistentRef = attrs[(__bridge id)kSecValuePersistentRef];
+                if (persistentRef) {
+                    NSDictionary *dataQuery = @{
+                        (__bridge id)kSecValuePersistentRef: persistentRef,
+                        (__bridge id)kSecReturnData:         @YES,
+                    };
 
-                // Build precise match from known attributes
-                if ([entry[@"account"] length] > 0) dataQuery[(__bridge id)kSecAttrAccount] = entry[@"account"];
-                if ([entry[@"service"] length] > 0) dataQuery[(__bridge id)kSecAttrService] = entry[@"service"];
-                if ([entry[@"accessGroup"] length] > 0) dataQuery[(__bridge id)kSecAttrAccessGroup] = entry[@"accessGroup"];
-                if ([entry[@"server"] length] > 0) dataQuery[(__bridge id)kSecAttrServer] = entry[@"server"];
+                    CFTypeRef dataResult = NULL;
+                    OSStatus dataStatus = SecItemCopyMatching((__bridge CFDictionaryRef)dataQuery, &dataResult);
 
-                CFTypeRef dataResult = NULL;
-                OSStatus dataStatus = SecItemCopyMatching((__bridge CFDictionaryRef)dataQuery, &dataResult);
-
-                if (dataStatus == errSecSuccess && dataResult) {
-                    NSData *valueData = (__bridge_transfer NSData *)dataResult;
-                    if (valueData.length > 0) {
-                        decode_value_blob(valueData, entry);
-                        entry[@"decrypted"] = @YES;
-                        decryptedCount++;
+                    if (dataStatus == errSecSuccess && dataResult) {
+                        NSData *valueData = (__bridge_transfer NSData *)dataResult;
+                        if (valueData.length > 0) {
+                            decode_value_blob(valueData, entry);
+                            entry[@"decrypted"] = @YES;
+                            decryptedCount++;
+                        }
+                    } else {
+                        entry[@"valueEncoding"] = @"encrypted";
+                        entry[@"valueType"] = [NSString stringWithFormat:@"SecAPI error %d", (int)dataStatus];
+                        if (j == 0) {
+                            [diag addObject:[NSString stringWithFormat:@"%@ data query: error %d",
+                                classes[i].name, (int)dataStatus]];
+                        }
                     }
                 } else {
-                    // Mark as encrypted — value exists but we couldn't decrypt
                     entry[@"valueEncoding"] = @"encrypted";
-                    entry[@"valueType"] = [NSString stringWithFormat:@"SecAPI error %d", (int)dataStatus];
+                    entry[@"valueType"] = @"no persistent ref";
                 }
 
                 entry[@"_rowid"] = @(secApiTotal + (int)j);
