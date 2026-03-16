@@ -1,4 +1,5 @@
 #import "vphoned_shared_cache.h"
+#include <stdint.h>
 #import "vphoned_protocol.h"
 #include <mach-o/dyld_images.h>
 #include <mach-o/loader.h>
@@ -72,6 +73,142 @@ struct dyld_cache_image_info {
 };
 
 #define DYLD_CACHE_DIR "/System/Library/Caches/com.apple.dyld/"
+#define MAX_CACHE_FILES 128
+#define MAX_MAPPINGS    512
+
+// MARK: - Multi-file cache context
+
+/// A single mmapped cache file (main or subcache).
+struct cache_file {
+    void    *base;
+    size_t   size;
+};
+
+/// One VM→file mapping entry, resolved across all subcache files.
+struct resolved_mapping {
+    uint64_t vmAddr;
+    uint64_t vmSize;
+    uint64_t fileOffset;    // offset within the specific cache_file
+    int      fileIndex;     // index into cache_file array
+};
+
+/// Full context for working with a split shared cache.
+struct cache_ctx {
+    struct cache_file        files[MAX_CACHE_FILES];
+    int                      fileCount;
+    struct resolved_mapping  mappings[MAX_MAPPINGS];
+    int                      mappingCount;
+    // Image info (from main cache only)
+    struct dyld_cache_image_info *images;
+    uint32_t                 imageCount;
+    void                    *mainBase;
+    size_t                   mainSize;
+};
+
+/// Open the main cache + all subcache files, build unified mapping table.
+/// `mainPath` should be the base cache file (e.g. dyld_shared_cache_arm64e).
+/// Returns YES on success.
+static BOOL ctx_open(struct cache_ctx *ctx, const char *mainPath) {
+    memset(ctx, 0, sizeof(*ctx));
+
+    // Map main file
+    ctx->files[0].base = map_cache(mainPath, &ctx->files[0].size);
+    if (!ctx->files[0].base) return NO;
+    ctx->fileCount = 1;
+    ctx->mainBase = ctx->files[0].base;
+    ctx->mainSize = ctx->files[0].size;
+
+    // Parse main header for image info
+    struct dyld_cache_header *hdr = (struct dyld_cache_header *)ctx->mainBase;
+    if (hdr->imagesOffset + hdr->imagesCount * sizeof(struct dyld_cache_image_info) <= ctx->mainSize) {
+        ctx->images = (struct dyld_cache_image_info *)((uint8_t *)ctx->mainBase + hdr->imagesOffset);
+        ctx->imageCount = hdr->imagesCount;
+    }
+
+    // Add main file's mappings
+    if (hdr->mappingOffset + hdr->mappingCount * sizeof(struct dyld_cache_mapping_info) <= ctx->mainSize) {
+        struct dyld_cache_mapping_info *maps =
+            (struct dyld_cache_mapping_info *)((uint8_t *)ctx->mainBase + hdr->mappingOffset);
+        for (uint32_t i = 0; i < hdr->mappingCount && ctx->mappingCount < MAX_MAPPINGS; i++) {
+            ctx->mappings[ctx->mappingCount++] = (struct resolved_mapping){
+                .vmAddr = maps[i].address,
+                .vmSize = maps[i].size,
+                .fileOffset = maps[i].fileOffset,
+                .fileIndex = 0,
+            };
+        }
+    }
+
+    // Find and open all subcache files (same prefix + .01, .02, ... or .symbols)
+    // Derive the base name: e.g. "/System/.../dyld_shared_cache_arm64e"
+    NSString *mainStr = [NSString stringWithUTF8String:mainPath];
+    NSString *dir = [mainStr stringByDeletingLastPathComponent];
+    NSString *baseName = [mainStr lastPathComponent];
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *contents = [fm contentsOfDirectoryAtPath:dir error:nil];
+    for (NSString *name in contents) {
+        if (![name hasPrefix:baseName]) continue;
+        if ([name isEqualToString:baseName]) continue;  // skip main file
+        if ([name hasSuffix:@".map"]) continue;
+
+        // Must start with baseName + "." (e.g. ".01", ".symbols")
+        if (name.length <= baseName.length || [name characterAtIndex:baseName.length] != '.')
+            continue;
+
+        if (ctx->fileCount >= MAX_CACHE_FILES) break;
+
+        NSString *subPath = [dir stringByAppendingPathComponent:name];
+        int idx = ctx->fileCount;
+        ctx->files[idx].base = map_cache([subPath fileSystemRepresentation], &ctx->files[idx].size);
+        if (!ctx->files[idx].base) continue;
+        ctx->fileCount++;
+
+        // Parse this subcache's mappings
+        struct dyld_cache_header *subHdr = (struct dyld_cache_header *)ctx->files[idx].base;
+        if (memcmp(subHdr->magic, "dyld_v", 6) != 0) continue;  // not a valid cache
+
+        if (subHdr->mappingOffset + subHdr->mappingCount * sizeof(struct dyld_cache_mapping_info)
+            <= ctx->files[idx].size) {
+            struct dyld_cache_mapping_info *subMaps =
+                (struct dyld_cache_mapping_info *)((uint8_t *)ctx->files[idx].base + subHdr->mappingOffset);
+            for (uint32_t i = 0; i < subHdr->mappingCount && ctx->mappingCount < MAX_MAPPINGS; i++) {
+                ctx->mappings[ctx->mappingCount++] = (struct resolved_mapping){
+                    .vmAddr = subMaps[i].address,
+                    .vmSize = subMaps[i].size,
+                    .fileOffset = subMaps[i].fileOffset,
+                    .fileIndex = idx,
+                };
+            }
+        }
+    }
+
+    NSLog(@"vphoned: cache context: %d files, %d mappings, %u images",
+          ctx->fileCount, ctx->mappingCount, ctx->imageCount);
+    return YES;
+}
+
+/// Release all mmapped files.
+static void ctx_close(struct cache_ctx *ctx) {
+    for (int i = 0; i < ctx->fileCount; i++) {
+        if (ctx->files[i].base) munmap(ctx->files[i].base, ctx->files[i].size);
+    }
+    memset(ctx, 0, sizeof(*ctx));
+}
+
+/// Resolve a VM address to a pointer in the mmapped cache data.
+/// Returns NULL if the address is not covered by any mapping.
+static const void *ctx_resolve(struct cache_ctx *ctx, uint64_t vmAddr, uint64_t size) {
+    for (int i = 0; i < ctx->mappingCount; i++) {
+        struct resolved_mapping *m = &ctx->mappings[i];
+        if (vmAddr >= m->vmAddr && vmAddr + size <= m->vmAddr + m->vmSize) {
+            uint64_t off = m->fileOffset + (vmAddr - m->vmAddr);
+            if (off + size > ctx->files[m->fileIndex].size) return NULL;
+            return (const uint8_t *)ctx->files[m->fileIndex].base + off;
+        }
+    }
+    return NULL;
+}
 
 // MARK: - Helpers
 
@@ -85,7 +222,6 @@ static NSArray<NSDictionary *> *list_cache_files(void) {
     NSMutableArray *result = [NSMutableArray array];
     for (NSString *name in contents) {
         if (![name hasPrefix:@"dyld_shared_cache"]) continue;
-        // Skip .map files and subcache symbol files
         if ([name hasSuffix:@".map"]) continue;
 
         NSString *full = [@DYLD_CACHE_DIR stringByAppendingPathComponent:name];
@@ -101,7 +237,7 @@ static NSArray<NSDictionary *> *list_cache_files(void) {
     return result;
 }
 
-/// Map the cache file into memory (read-only). Returns NULL on failure.
+/// Map a single cache file into memory (read-only).
 static void *map_cache(const char *path, size_t *out_size) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) return NULL;
@@ -117,7 +253,7 @@ static void *map_cache(const char *path, size_t *out_size) {
     return base;
 }
 
-/// List all images in a mapped cache. Returns array of {path, address, index}.
+/// List all images in the main cache. Returns array of {path, address, index}.
 static NSArray<NSDictionary *> *list_images(void *base, size_t size) {
     struct dyld_cache_header *hdr = (struct dyld_cache_header *)base;
 
@@ -134,7 +270,6 @@ static NSArray<NSDictionary *> *list_images(void *base, size_t size) {
         if (pathOff >= size) continue;
 
         const char *path = (const char *)base + pathOff;
-        // Safety: ensure null-terminated within bounds
         size_t maxLen = size - pathOff;
         size_t pathLen = strnlen(path, maxLen);
         if (pathLen == maxLen) continue;
@@ -148,102 +283,113 @@ static NSArray<NSDictionary *> *list_images(void *base, size_t size) {
     return result;
 }
 
-/// Find the file region for a single Mach-O image in the cache.
-/// Walks the cache mappings to locate contiguous segments.
-/// Returns YES and fills out_offset/out_size on success.
-static BOOL find_image_region(void *base, size_t cache_size,
-                              uint64_t image_addr,
-                              uint64_t *out_offset, uint64_t *out_size) {
-    struct dyld_cache_header *hdr = (struct dyld_cache_header *)base;
-    if (hdr->mappingOffset + hdr->mappingCount * sizeof(struct dyld_cache_mapping_info) > cache_size)
-        return NO;
+// MARK: - Dylib Extraction
 
-    struct dyld_cache_mapping_info *mappings =
-        (struct dyld_cache_mapping_info *)((uint8_t *)base + hdr->mappingOffset);
+/// Extract a single dylib from the split shared cache into a standalone Mach-O.
+/// Resolves all segments across subcache files and rewrites file offsets.
+/// Returns nil on failure.
+static NSData *extract_dylib(struct cache_ctx *ctx, uint32_t imageIndex) {
+    if (imageIndex >= ctx->imageCount) return nil;
 
-    // Find which mapping contains the image header
-    uint64_t headerFileOffset = 0;
-    BOOL found = NO;
-    for (uint32_t i = 0; i < hdr->mappingCount; i++) {
-        uint64_t mapStart = mappings[i].address;
-        uint64_t mapEnd = mapStart + mappings[i].size;
-        if (image_addr >= mapStart && image_addr < mapEnd) {
-            headerFileOffset = mappings[i].fileOffset + (image_addr - mapStart);
-            found = YES;
-            break;
-        }
-    }
-    if (!found) return NO;
-    if (headerFileOffset + sizeof(struct mach_header_64) > cache_size) return NO;
+    uint64_t imageAddr = ctx->images[imageIndex].address;
 
-    // Read the Mach-O header to find its total size from load commands
-    struct mach_header_64 *mh = (struct mach_header_64 *)((uint8_t *)base + headerFileOffset);
-    if (mh->magic != MH_MAGIC_64) return NO;
+    // Resolve the Mach-O header
+    const struct mach_header_64 *mh =
+        (const struct mach_header_64 *)ctx_resolve(ctx, imageAddr, sizeof(struct mach_header_64));
+    if (!mh || mh->magic != MH_MAGIC_64) return nil;
 
-    // Walk segments to find the total VM extent of this image
-    uint64_t vmLow = UINT64_MAX;
-    uint64_t vmHigh = 0;
-    uint32_t cmdOffset = (uint32_t)(headerFileOffset + sizeof(struct mach_header_64));
+    uint32_t headerAndCmdsSize = sizeof(struct mach_header_64) + mh->sizeofcmds;
+    const void *headerPtr = ctx_resolve(ctx, imageAddr, headerAndCmdsSize);
+    if (!headerPtr) return nil;
+
+    // First pass: calculate output size
+    // Layout: [mach_header_64 + load commands] [segment data...]
+    // We page-align segment data starts for correctness.
+    uint64_t dataStart = (headerAndCmdsSize + 0x3FFF) & ~0x3FFFULL;  // 16K page align
+    uint64_t outputSize = dataStart;
+
+    // Count segments and compute total data size
+    const uint8_t *cmdPtr = (const uint8_t *)headerPtr + sizeof(struct mach_header_64);
     for (uint32_t i = 0; i < mh->ncmds; i++) {
-        if (cmdOffset + sizeof(struct load_command) > cache_size) return NO;
-        struct load_command *lc = (struct load_command *)((uint8_t *)base + cmdOffset);
-        if (lc->cmdsize < sizeof(struct load_command)) return NO;
-
+        const struct load_command *lc = (const struct load_command *)cmdPtr;
         if (lc->cmd == LC_SEGMENT_64) {
-            struct segment_command_64 *seg = (struct segment_command_64 *)lc;
-            if (seg->vmsize > 0) {
-                if (seg->vmaddr < vmLow) vmLow = seg->vmaddr;
-                if (seg->vmaddr + seg->vmsize > vmHigh) vmHigh = seg->vmaddr + seg->vmsize;
+            const struct segment_command_64 *seg = (const struct segment_command_64 *)cmdPtr;
+            if (seg->filesize > 0) {
+                // Align each segment to page boundary in output
+                outputSize = (outputSize + 0x3FFF) & ~0x3FFFULL;
+                outputSize += seg->filesize;
             }
         }
-        cmdOffset += lc->cmdsize;
+        cmdPtr += lc->cmdsize;
     }
 
-    if (vmLow >= vmHigh) return NO;
+    if (outputSize > 512 * 1024 * 1024) return nil;  // sanity: 512MB max
 
-    // The extract payload is the Mach-O header + all load commands + __TEXT data.
-    // For cache extraction, we output the file region from the header to the end
-    // of the last segment that falls in the same mapping (usually __TEXT).
-    // Full dylib reconstruction would require re-linking segments from multiple
-    // mappings, but for analysis the __TEXT-mapped region is what callers need.
-    //
-    // Compute the contiguous file region starting at the header within its mapping.
-    uint64_t mappingBase = 0;
-    uint64_t mappingEnd = 0;
-    for (uint32_t i = 0; i < hdr->mappingCount; i++) {
-        uint64_t mapStart = mappings[i].address;
-        uint64_t mapSize = mappings[i].size;
-        if (image_addr >= mapStart && image_addr < mapStart + mapSize) {
-            mappingBase = mappings[i].fileOffset;
-            mappingEnd = mappings[i].fileOffset + mapSize;
-            break;
-        }
-    }
+    // Allocate output buffer
+    NSMutableData *output = [NSMutableData dataWithLength:(NSUInteger)outputSize];
+    uint8_t *outBuf = (uint8_t *)output.mutableBytes;
 
-    // Walk segments to find the furthest file extent within __TEXT mapping
-    uint64_t fileHigh = headerFileOffset + sizeof(struct mach_header_64) + mh->sizeofcmds;
-    cmdOffset = (uint32_t)(headerFileOffset + sizeof(struct mach_header_64));
-    for (uint32_t i = 0; i < mh->ncmds; i++) {
-        if (cmdOffset + sizeof(struct load_command) > cache_size) break;
-        struct load_command *lc = (struct load_command *)((uint8_t *)base + cmdOffset);
-        if (lc->cmdsize < sizeof(struct load_command)) break;
+    // Copy header + load commands (we'll patch the commands in-place)
+    memcpy(outBuf, headerPtr, headerAndCmdsSize);
 
+    // Second pass: copy segment data and fix up file offsets in load commands
+    uint64_t curOffset = dataStart;
+    uint8_t *outCmdPtr = outBuf + sizeof(struct mach_header_64);
+    struct mach_header_64 *outMH = (struct mach_header_64 *)outBuf;
+    int segmentsResolved = 0;
+    int segmentsFailed = 0;
+
+    for (uint32_t i = 0; i < outMH->ncmds; i++) {
+        struct load_command *lc = (struct load_command *)outCmdPtr;
         if (lc->cmd == LC_SEGMENT_64) {
-            struct segment_command_64 *seg = (struct segment_command_64 *)lc;
-            // Only include segments whose file data is in the same mapping
-            uint64_t segFileEnd = seg->fileoff + seg->filesize;
-            if (seg->fileoff >= mappingBase && segFileEnd <= mappingEnd) {
-                if (segFileEnd > fileHigh) fileHigh = segFileEnd;
+            struct segment_command_64 *seg = (struct segment_command_64 *)outCmdPtr;
+
+            if (seg->filesize > 0) {
+                uint64_t alignedOffset = (curOffset + 0x3FFF) & ~0x3FFFULL;
+
+                // Resolve segment data from the cache via VM address
+                const void *segData = ctx_resolve(ctx, seg->vmaddr, seg->filesize);
+                if (segData) {
+                    memcpy(outBuf + alignedOffset, segData, seg->filesize);
+                    segmentsResolved++;
+                } else {
+                    // Zero-fill if we can't resolve (segment in unmapped subcache)
+                    memset(outBuf + alignedOffset, 0, seg->filesize);
+                    segmentsFailed++;
+                    NSLog(@"vphoned: extract: failed to resolve segment %.16s at 0x%llx",
+                          seg->segname, seg->vmaddr);
+                }
+
+                // Patch file offset in the load command
+                seg->fileoff = alignedOffset;
+                curOffset = alignedOffset + seg->filesize;
+
+                // Fix section file offsets too
+                struct section_64 *sections = (struct section_64 *)(outCmdPtr + sizeof(struct segment_command_64));
+                for (uint32_t s = 0; s < seg->nsects; s++) {
+                    if (sections[s].offset != 0) {
+                        // Section offset is relative to segment start in original cache;
+                        // rebase to new segment file offset
+                        uint64_t sectionVMOffset = sections[s].addr - seg->vmaddr;
+                        sections[s].offset = (uint32_t)(seg->fileoff + sectionVMOffset);
+                    }
+                }
+            } else {
+                seg->fileoff = 0;
             }
         }
-        cmdOffset += lc->cmdsize;
+        outCmdPtr += lc->cmdsize;
     }
 
-    if (fileHigh > cache_size) fileHigh = cache_size;
+    // Trim output to actual used size
+    if (curOffset < outputSize) {
+        [output setLength:(NSUInteger)curOffset];
+    }
 
-    *out_offset = headerFileOffset;
-    *out_size = fileHigh - headerFileOffset;
-    return YES;
+    NSLog(@"vphoned: extract: %d segments resolved, %d failed, %lu bytes output",
+          segmentsResolved, segmentsFailed, (unsigned long)output.length);
+
+    return output;
 }
 
 // MARK: - Command Handler
@@ -334,7 +480,7 @@ NSDictionary *vp_handle_cache_command(int fd, NSDictionary *msg) {
         return r;
     }
 
-    // -- cache_extract: extract a single dylib from the cache --
+    // -- cache_extract: extract a single dylib with multi-subcache resolution --
     if ([type isEqualToString:@"cache_extract"]) {
         NSString *path = msg[@"path"];
         NSNumber *indexNum = msg[@"index"];
@@ -344,70 +490,113 @@ NSDictionary *vp_handle_cache_command(int fd, NSDictionary *msg) {
             return r;
         }
 
-        size_t cacheSize = 0;
-        void *base = map_cache([path fileSystemRepresentation], &cacheSize);
-        if (!base) {
+        struct cache_ctx ctx;
+        if (!ctx_open(&ctx, [path fileSystemRepresentation])) {
             NSMutableDictionary *r = vp_make_response(@"err", reqId);
-            r[@"msg"] = [NSString stringWithFormat:@"failed to map cache: %s", strerror(errno)];
+            r[@"msg"] = [NSString stringWithFormat:@"failed to open cache: %s", strerror(errno)];
             return r;
         }
 
-        struct dyld_cache_header *hdr = (struct dyld_cache_header *)base;
-        uint32_t count = hdr->imagesCount;
-        uint32_t offset = hdr->imagesOffset;
-
         uint32_t idx = [indexNum unsignedIntValue];
-        if (idx >= count || offset + count * sizeof(struct dyld_cache_image_info) > cacheSize) {
-            munmap(base, cacheSize);
+        if (idx >= ctx.imageCount) {
+            ctx_close(&ctx);
             NSMutableDictionary *r = vp_make_response(@"err", reqId);
             r[@"msg"] = @"index out of range";
             return r;
         }
 
-        struct dyld_cache_image_info *images =
-            (struct dyld_cache_image_info *)((uint8_t *)base + offset);
-        uint64_t imageAddr = images[idx].address;
-
         // Get image path for response
         const char *imagePath = "";
-        uint32_t pathOff = images[idx].pathFileOffset;
-        if (pathOff < cacheSize) {
-            imagePath = (const char *)base + pathOff;
+        uint32_t pathOff = ctx.images[idx].pathFileOffset;
+        if (pathOff < ctx.mainSize) {
+            imagePath = (const char *)ctx.mainBase + pathOff;
         }
 
-        uint64_t regionOffset = 0, regionSize = 0;
-        if (!find_image_region(base, cacheSize, imageAddr, &regionOffset, &regionSize)) {
-            munmap(base, cacheSize);
+        NSData *extracted = extract_dylib(&ctx, idx);
+        ctx_close(&ctx);
+
+        if (!extracted) {
             NSMutableDictionary *r = vp_make_response(@"err", reqId);
-            r[@"msg"] = @"failed to locate image region in cache";
+            r[@"msg"] = @"failed to extract dylib from cache";
             return r;
         }
 
         // Send header with size, then stream the raw bytes
         NSMutableDictionary *header = vp_make_response(@"cache_data", reqId);
-        header[@"size"] = @((unsigned long long)regionSize);
+        header[@"size"] = @((unsigned long long)extracted.length);
         header[@"image_path"] = [NSString stringWithUTF8String:imagePath];
         if (!vp_write_message(fd, header)) {
-            munmap(base, cacheSize);
             return nil;
         }
 
-        // Stream from the mmap in chunks
-        uint8_t *src = (uint8_t *)base + regionOffset;
-        uint64_t remaining = regionSize;
+        // Stream extracted Mach-O in chunks
+        const uint8_t *src = (const uint8_t *)extracted.bytes;
+        NSUInteger remaining = extracted.length;
         while (remaining > 0) {
-            size_t chunk = remaining < 32768 ? (size_t)remaining : 32768;
+            size_t chunk = remaining < 32768 ? remaining : 32768;
             if (!vp_write_fully(fd, src, chunk)) {
                 NSLog(@"vphoned: cache_extract write failed");
-                munmap(base, cacheSize);
                 return nil;
             }
             src += chunk;
             remaining -= chunk;
         }
 
-        munmap(base, cacheSize);
-        NSLog(@"vphoned: cache_extract %s (%llu bytes)", imagePath, regionSize);
+        NSLog(@"vphoned: cache_extract %s (%lu bytes)", imagePath, (unsigned long)extracted.length);
+        return nil;  // Response already written inline
+    }
+
+    // -- cache_download: stream a raw cache file to host (for offline analysis) --
+    if ([type isEqualToString:@"cache_download"]) {
+        NSString *path = msg[@"path"];
+        if (!path) {
+            NSMutableDictionary *r = vp_make_response(@"err", reqId);
+            r[@"msg"] = @"missing path";
+            return r;
+        }
+
+        // Restrict to cache directory
+        if (![path hasPrefix:@DYLD_CACHE_DIR]) {
+            NSMutableDictionary *r = vp_make_response(@"err", reqId);
+            r[@"msg"] = @"path must be in cache directory";
+            return r;
+        }
+
+        int fileFd = open([path fileSystemRepresentation], O_RDONLY);
+        if (fileFd < 0) {
+            NSMutableDictionary *r = vp_make_response(@"err", reqId);
+            r[@"msg"] = [NSString stringWithFormat:@"open failed: %s", strerror(errno)];
+            return r;
+        }
+
+        struct stat st;
+        if (fstat(fileFd, &st) != 0 || !S_ISREG(st.st_mode)) {
+            close(fileFd);
+            NSMutableDictionary *r = vp_make_response(@"err", reqId);
+            r[@"msg"] = @"stat failed or not a regular file";
+            return r;
+        }
+
+        // Send header then stream raw file
+        NSMutableDictionary *header = vp_make_response(@"cache_data", reqId);
+        header[@"size"] = @((unsigned long long)st.st_size);
+        header[@"image_path"] = path;
+        if (!vp_write_message(fd, header)) {
+            close(fileFd);
+            return nil;
+        }
+
+        uint8_t buf[32768];
+        ssize_t n;
+        while ((n = read(fileFd, buf, sizeof(buf))) > 0) {
+            if (!vp_write_fully(fd, buf, (size_t)n)) {
+                NSLog(@"vphoned: cache_download write failed for %@", path);
+                close(fileFd);
+                return nil;
+            }
+        }
+        close(fileFd);
+        NSLog(@"vphoned: cache_download %@ (%lld bytes)", path, (long long)st.st_size);
         return nil;  // Response already written inline
     }
 

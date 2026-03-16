@@ -64,6 +64,43 @@ class VPhoneKeychainBrowserModel {
         ("Identities", "idnt"),
     ]
 
+    // MARK: - Selected Item Detail
+
+    var selectedItem: VPhoneKeychainItem?
+    var selectedItemValue: String?
+    var selectedItemValueType: String?
+    var isGettingValue = false
+
+    func getValue(for item: VPhoneKeychainItem) async {
+        isGettingValue = true
+        selectedItem = item
+        selectedItemValue = nil
+        selectedItemValueType = nil
+        do {
+            let result = try await control.keychainGetValue(
+                itemClass: item.itemClass,
+                account: item.account,
+                service: item.service,
+                accessGroup: item.accessGroup,
+                server: item.server,
+                rowid: item.rowid
+            )
+            selectedItemValue = result.value
+            selectedItemValueType = result.valueType
+            diagnostics.append(contentsOf: result.diagnostics)
+            if result.decrypted {
+                diagnostics.append("value decrypted via SecItemCopyMatching")
+            }
+            if let source = result.source {
+                diagnostics.append("source: \(source)")
+            }
+        } catch {
+            self.error = "Get value: \(error)"
+            diagnostics.append("keychain_get failed: \(error)")
+        }
+        isGettingValue = false
+    }
+
     // MARK: - Actions
 
     func addTestItem() async {

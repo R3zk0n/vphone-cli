@@ -11,9 +11,11 @@ class VPhoneMenuController {
 
     var onFilesPressed: (() -> Void)?
     var onKeychainPressed: (() -> Void)?
+    var onCachePressed: (() -> Void)?
     var onAppsPressed: (() -> Void)?
     var connectFileBrowserItem: NSMenuItem?
     var connectKeychainBrowserItem: NSMenuItem?
+    var connectCacheBrowserItem: NSMenuItem?
     var connectDevModeStatusItem: NSMenuItem?
     var connectPingItem: NSMenuItem?
     var connectGuestVersionItem: NSMenuItem?

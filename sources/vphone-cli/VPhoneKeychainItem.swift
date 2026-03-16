@@ -11,7 +11,9 @@ struct VPhoneKeychainItem: Identifiable, Hashable {
     let server: String
     let value: String
     let valueEncoding: String
+    let valueType: String?
     let valueSize: Int
+    let rowid: Int
     let created: Date?
     let modified: Date?
 
@@ -42,7 +44,17 @@ struct VPhoneKeychainItem: Identifiable, Hashable {
         if valueEncoding == "base64" {
             return "[\(ByteCountFormatter.string(fromByteCount: Int64(valueSize), countStyle: .file)) binary]"
         }
+        if valueEncoding == "json" {
+            // Truncate long JSON for table display
+            if value.count > 80 {
+                return String(value.prefix(77)) + "..."
+            }
+        }
         return value
+    }
+
+    var valueTypeLabel: String {
+        valueType ?? (valueEncoding == "base64" ? "binary" : "text")
     }
 
     var displayName: String {
@@ -105,6 +117,7 @@ extension VPhoneKeychainItem {
         server = entry["server"] as? String ?? ""
         value = entry["value"] as? String ?? ""
         valueEncoding = entry["valueEncoding"] as? String ?? ""
+        valueType = entry["valueType"] as? String
         valueSize = (entry["valueSize"] as? NSNumber)?.intValue ?? 0
 
         if let ts = entry["created"] as? Double {
@@ -127,7 +140,8 @@ extension VPhoneKeychainItem {
             modified = nil
         }
 
-        let rowid = (entry["_rowid"] as? NSNumber)?.intValue ?? index
-        id = "\(cls)-\(rowid)"
+        let rid = (entry["_rowid"] as? NSNumber)?.intValue ?? index
+        rowid = rid
+        id = "\(cls)-\(rid)"
     }
 }

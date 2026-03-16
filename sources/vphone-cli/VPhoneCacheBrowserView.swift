@@ -35,6 +35,11 @@ struct VPhoneCacheBrowserView: View {
                         .foregroundStyle(.tertiary)
                 }
 
+                Button("Download Cache") {
+                    model.downloadCache()
+                }
+                .disabled(model.selectedCache == nil || model.isDownloading)
+
                 TextField("Search dylibs...", text: $model.searchText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 220)

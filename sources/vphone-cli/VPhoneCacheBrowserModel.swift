@@ -131,6 +131,37 @@ class VPhoneCacheBrowserModel {
         }
     }
 
+    // MARK: - Download Cache
+
+    var isDownloading = false
+
+    func downloadCache() {
+        guard let cache = selectedCache else { return }
+        isDownloading = true
+        statusMessage = "Downloading \(cache.name)..."
+        Task {
+            do {
+                let data = try await control.cacheDownload(path: cache.path)
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = cache.name
+                panel.canCreateDirectories = true
+                let response = panel.runModal()
+                if response == .OK, let url = panel.url {
+                    try data.write(to: url)
+                    statusMessage = "Saved \(cache.name) (\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)))"
+                } else {
+                    statusMessage = nil
+                }
+            } catch {
+                self.error = "\(error)"
+                statusMessage = nil
+            }
+            isDownloading = false
+        }
+    }
+
+    // MARK: - Select Cache
+
     func selectCache(_ cache: VPhoneControl.CacheFile) {
         selectedCache = cache
         images = []

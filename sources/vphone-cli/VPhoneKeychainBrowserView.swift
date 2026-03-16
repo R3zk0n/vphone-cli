@@ -13,6 +13,11 @@ struct VPhoneKeychainBrowserView: View {
                 .searchable(text: $model.searchText, prompt: "Filter keychain items")
                 .toolbar { toolbarContent }
 
+            if let item = model.selectedItem {
+                Divider()
+                valueDetailPanel(item: item)
+            }
+
             if model.showDiagnostics {
                 Divider()
                 diagnosticsPanel
@@ -147,6 +152,69 @@ struct VPhoneKeychainBrowserView: View {
         .background(.bar)
     }
 
+    // MARK: - Value Detail Panel
+
+    func valueDetailPanel(item: VPhoneKeychainItem) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Value: \(item.displayName)")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                if let vt = model.selectedItemValueType {
+                    Text("(\(vt))")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+
+                Spacer()
+
+                if model.isGettingValue {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Button {
+                    if let val = model.selectedItemValue, !val.isEmpty {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(val, forType: .string)
+                    }
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.borderless)
+                .disabled(model.selectedItemValue == nil)
+                .help("Copy value to clipboard")
+
+                Button {
+                    model.selectedItem = nil
+                    model.selectedItemValue = nil
+                    model.selectedItemValueType = nil
+                } label: {
+                    Image(systemName: "xmark.circle")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.borderless)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.bar)
+
+            ScrollView {
+                Text(model.selectedItemValue ?? "(loading...)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+            .frame(height: 120)
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
+        }
+    }
+
     // MARK: - Diagnostics Panel
 
     var diagnosticsPanel: some View {
@@ -247,6 +315,12 @@ struct VPhoneKeychainBrowserView: View {
 
     @ViewBuilder
     func contextMenu(for ids: Set<VPhoneKeychainItem.ID>) -> some View {
+        if ids.count == 1, let item = model.filteredItems.first(where: { ids.contains($0.id) }) {
+            Button("Get Decrypted Value") {
+                Task { await model.getValue(for: item) }
+            }
+            Divider()
+        }
         Button("Copy Account") { copyField(ids: ids, keyPath: \.account) }
         Button("Copy Service") { copyField(ids: ids, keyPath: \.service) }
         Button("Copy Value") { copyField(ids: ids, keyPath: \.value) }

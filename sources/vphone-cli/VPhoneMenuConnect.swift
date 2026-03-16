@@ -18,6 +18,11 @@ extension VPhoneMenuController {
         connectKeychainBrowserItem = keychainBrowser
         menu.addItem(keychainBrowser)
 
+        let cacheBrowser = makeItem("Shared Cache Browser", action: #selector(openCache))
+        cacheBrowser.isEnabled = false
+        connectCacheBrowserItem = cacheBrowser
+        menu.addItem(cacheBrowser)
+
         menu.addItem(NSMenuItem.separator())
 
         let devModeStatus = makeItem("Developer Mode Status", action: #selector(devModeStatus))
@@ -83,12 +88,20 @@ extension VPhoneMenuController {
         connectGuestVersionItem?.isEnabled = available
     }
 
+    func updateCacheAvailability(available: Bool) {
+        connectCacheBrowserItem?.isEnabled = available
+    }
+
     @objc func openFiles() {
         onFilesPressed?()
     }
 
     @objc func openKeychain() {
         onKeychainPressed?()
+    }
+
+    @objc func openCache() {
+        onCachePressed?()
     }
 
     @objc func devModeStatus() {
