@@ -328,7 +328,6 @@ static NSArray *query_secitem(CFStringRef secClass, NSString *className, NSMutab
         (__bridge id)kSecMatchLimit:        (__bridge id)kSecMatchLimitAll,
         (__bridge id)kSecReturnAttributes:  @YES,
         (__bridge id)kSecReturnData:        @YES,
-        (__bridge id)kSecAttrSynchronizable: (__bridge id)kSecAttrSynchronizableAny,
     };
 
     CFArrayRef result = NULL;

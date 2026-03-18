@@ -535,6 +535,8 @@
 	<true/>
 	<key>inter-app-audio</key>
 	<true/>
+	<key>application-identifier</key>
+	<string>com.vphone.vphoned</string>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>*</string>
