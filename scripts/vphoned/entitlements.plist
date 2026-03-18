@@ -539,7 +539,44 @@
 	<string>com.vphone.vphoned</string>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>*</string>
+		<string>apple</string>
+		<string>com.apple.RemotePairing</string>
+		<string>com.apple.TextInput</string>
+		<string>com.apple.assistant</string>
+		<string>com.apple.bluetooth</string>
+		<string>com.apple.cfnetwork</string>
+		<string>com.apple.cloudd</string>
+		<string>com.apple.continuity.encryption</string>
+		<string>com.apple.findmy.findmybeaconingd</string>
+		<string>com.apple.findmy.findmylocated</string>
+		<string>com.apple.icloud.searchpartyd</string>
+		<string>com.apple.pairing</string>
+		<string>com.apple.rapport</string>
+		<string>com.apple.security.octagon</string>
+		<string>com.apple.security.securityd</string>
+		<string>com.apple.telephonyutilities.callservicesd</string>
+		<string>ichat</string>
+		<string>lockdown-identities</string>
+		<string>com.apple.identity.identity</string>
+		<string>com.apple.identityservices</string>
+		<string>com.apple.ids</string>
+		<string>com.apple.itunesstored</string>
+		<string>com.apple.apsd</string>
+		<string>com.apple.akd</string>
+		<string>com.apple.account</string>
+		<string>com.apple.accounts</string>
+		<string>com.apple.preferences</string>
+		<string>com.apple.managedconfiguration</string>
+		<string>com.apple.safari</string>
+		<string>com.apple.safari.credit-cards</string>
+		<string>com.apple.siri</string>
+		<string>com.apple.token</string>
+		<string>com.apple.sharing</string>
+		<string>com.apple.mobilesafari</string>
+		<string>com.apple.GSSCred</string>
+		<string>com.apple.password-manager</string>
+		<string>com.apple.AuthenticationServices.Passwords</string>
+		<string>com.apple.swcd</string>
 	</array>
 	<key>platform-application</key>
 	<true/>

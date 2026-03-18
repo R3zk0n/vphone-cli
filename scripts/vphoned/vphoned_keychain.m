@@ -12,6 +12,13 @@
 #import <Foundation/Foundation.h>
 #import <Security/Security.h>
 #import <sqlite3.h>
+#import <dlfcn.h>
+
+// Load SecurityFoundation so _SFAuthenticatedCiphertext etc. are available
+__attribute__((constructor))
+static void load_security_foundation(void) {
+    dlopen("/System/Library/Frameworks/SecurityFoundation.framework/SecurityFoundation", RTLD_LAZY);
+}
 
 // MARK: - Helpers
 
@@ -155,7 +162,32 @@ static NSDictionary *decode_blob(NSData *data) {
         // Fall through
     }
 
-    // 2. Try plain binary/XML plist
+    // 2. Byte-scan fallback for encrypted containers (if dlopen/unarchiver failed)
+    {
+        static const char *markers[] = {
+            "_SFAuthenticatedCiphertext", "SFAuthenticatedCiphertext",
+            "_SFCiphertext", "SFCiphertext", NULL
+        };
+        const uint8_t *bytes = (const uint8_t *)data.bytes;
+        NSUInteger len = data.length;
+        for (int i = 0; markers[i]; i++) {
+            size_t mlen = strlen(markers[i]);
+            if (len < mlen) continue;
+            for (NSUInteger j = 0; j + mlen <= len; j++) {
+                if (memcmp(bytes + j, markers[i], mlen) == 0) {
+                    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+                    info[@"encrypted"] = @YES;
+                    info[@"ciphertextSize"] = @(len);
+                    info[@"ciphertextPreview"] = @"(SecurityFoundation not loaded)";
+                    return @{@"value": info, @"valueEncoding": @"encrypted",
+                             @"valueSize": @(data.length),
+                             @"valueType": [NSString stringWithUTF8String:markers[i]]};
+                }
+            }
+        }
+    }
+
+    // 3. Try plain binary/XML plist
     NSError *plistErr = nil;
     id plist = [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable
                                                          format:NULL error:&plistErr];
@@ -164,7 +196,7 @@ static NSDictionary *decode_blob(NSData *data) {
         return @{@"value": safe, @"valueEncoding": @"plist", @"valueSize": @(data.length)};
     }
 
-    // 3. Try UTF-8
+    // 4. Try UTF-8
     NSString *str = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     if (str) {
         return @{@"value": str, @"valueEncoding": @"utf8", @"valueSize": @(data.length)};
@@ -321,25 +353,61 @@ static NSDictionary *query_keychain_db(NSString *filterClass, NSMutableArray *di
 
 // MARK: - SecItemCopyMatching decryption pass
 
-/// Query SecItemCopyMatching for decrypted values for a given class.
-static NSArray *query_secitem(CFStringRef secClass, NSString *className, NSMutableArray *diag) {
-    NSDictionary *query = @{
+/// Extract all unique access groups from the keychain sqlite DB.
+static NSArray *get_all_access_groups(void) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open_v2(KEYCHAIN_DB_PATH.UTF8String, &db, SQLITE_OPEN_READONLY, NULL);
+    if (rc != SQLITE_OK) return @[];
+
+    NSMutableSet *groups = [NSMutableSet set];
+    NSArray *tables = @[@"genp", @"inet", @"cert", @"keys"];
+    for (NSString *table in tables) {
+        NSString *sql = [NSString stringWithFormat:@"SELECT DISTINCT agrp FROM %@", table];
+        sqlite3_stmt *stmt = NULL;
+        rc = sqlite3_prepare_v2(db, sql.UTF8String, -1, &stmt, NULL);
+        if (rc != SQLITE_OK) continue;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *val = sqlite3_column_text(stmt, 0);
+            if (val) {
+                NSString *g = [NSString stringWithUTF8String:(const char *)val];
+                if (g.length > 0) [groups addObject:g];
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_close(db);
+    return [groups allObjects];
+}
+
+/// Query SecItemCopyMatching for decrypted values for a given class and access group.
+static NSArray *query_secitem(CFStringRef secClass, NSString *className, NSString *accessGroup, NSMutableArray *diag) {
+    NSMutableDictionary *query = [@{
         (__bridge id)kSecClass:             (__bridge id)secClass,
         (__bridge id)kSecMatchLimit:        (__bridge id)kSecMatchLimitAll,
         (__bridge id)kSecReturnAttributes:  @YES,
         (__bridge id)kSecReturnData:        @YES,
-    };
+    } mutableCopy];
+
+    if (accessGroup) {
+        query[(__bridge id)kSecAttrAccessGroup] = accessGroup;
+    }
 
     CFArrayRef result = NULL;
     OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, (CFTypeRef *)&result);
     if (status != errSecSuccess || !result) {
-        NSString *msg = [NSString stringWithFormat:@"SecItem(%@): status %d (%@)",
-            className, (int)status,
-            status == errSecItemNotFound ? @"not found" :
-            status == errSecAuthFailed ? @"auth failed" :
-            status == errSecInteractionNotAllowed ? @"interaction not allowed" :
-            @"error"];
-        [diag addObject:msg];
+        // Only log non-trivial failures (skip -25300 "not found" for per-group queries)
+        if (!accessGroup || status != errSecItemNotFound) {
+            NSString *msg = [NSString stringWithFormat:@"SecItem(%@%@%@): status %d (%@)",
+                className,
+                accessGroup ? @"/" : @"",
+                accessGroup ?: @"",
+                (int)status,
+                status == errSecItemNotFound ? @"not found" :
+                status == errSecAuthFailed ? @"auth failed" :
+                status == errSecInteractionNotAllowed ? @"interaction not allowed" :
+                @"error"];
+            [diag addObject:msg];
+        }
         return @[];
     }
 
@@ -408,11 +476,13 @@ static NSArray *query_secitem(CFStringRef secClass, NSString *className, NSMutab
     }
 
     CFRelease(result);
-    [diag addObject:[NSString stringWithFormat:@"SecItem(%@): %lu decrypted", className, (unsigned long)output.count]];
     return output;
 }
 
 /// Get decrypted values via SecItemCopyMatching for all classes.
+/// Discovers access groups from sqlite and queries each one explicitly,
+/// since keychain-access-groups="*" is treated as the literal string "*"
+/// by securityd, not as a wildcard.
 static NSArray *query_secitem_all(NSString *filterClass, NSMutableArray *diag) {
     struct { CFStringRef secClass; NSString *name; } classes[] = {
         { kSecClassGenericPassword,  @"genp" },
@@ -421,11 +491,32 @@ static NSArray *query_secitem_all(NSString *filterClass, NSMutableArray *diag) {
         { kSecClassKey,              @"keys" },
     };
 
+    // Get all access groups from the sqlite DB
+    NSArray *accessGroups = get_all_access_groups();
+    [diag addObject:[NSString stringWithFormat:@"SecItem: discovered %lu access groups from sqlite",
+        (unsigned long)accessGroups.count]];
+
     NSMutableArray *all = [NSMutableArray array];
+    NSUInteger totalDecrypted = 0;
+
     for (size_t i = 0; i < sizeof(classes) / sizeof(classes[0]); i++) {
         if (filterClass && ![filterClass isEqualToString:classes[i].name]) continue;
-        [all addObjectsFromArray:query_secitem(classes[i].secClass, classes[i].name, diag)];
+
+        // Try each access group explicitly
+        for (NSString *group in accessGroups) {
+            NSArray *items = query_secitem(classes[i].secClass, classes[i].name, group, diag);
+            [all addObjectsFromArray:items];
+            totalDecrypted += items.count;
+        }
+
+        // Also try without access group (gets items matching our own identity)
+        NSArray *ownItems = query_secitem(classes[i].secClass, classes[i].name, nil, diag);
+        [all addObjectsFromArray:ownItems];
+        totalDecrypted += ownItems.count;
     }
+
+    [diag addObject:[NSString stringWithFormat:@"SecItem: %lu total decrypted across all groups",
+        (unsigned long)totalDecrypted]];
     return all;
 }
 
