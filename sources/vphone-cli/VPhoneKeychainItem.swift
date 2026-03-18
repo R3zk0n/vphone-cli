@@ -139,7 +139,28 @@ extension VPhoneKeychainItem {
         accessGroup = entry["accessGroup"] as? String ?? ""
         protection = entry["protection"] as? String ?? ""
         server = entry["server"] as? String ?? ""
-        value = entry["value"] as? String ?? ""
+        // Value can be a string (decoded) or a dictionary (encrypted blob info with IV, ciphertext, authTag)
+        if let strVal = entry["value"] as? String {
+            value = strVal
+        } else if let dictVal = entry["value"] as? [String: Any] {
+            // Encrypted blob info from _SFAuthenticatedCiphertext introspection
+            if let ctSize = dictVal["ciphertextSize"] as? NSNumber {
+                let preview = dictVal["ciphertextPreview"] as? String ?? ""
+                let ivSize = (dictVal["ivSize"] as? NSNumber)?.intValue ?? 0
+                let tagSize = (dictVal["authTagSize"] as? NSNumber)?.intValue ?? 0
+                value = "ct:\(ctSize) iv:\(ivSize) tag:\(tagSize) | \(preview)"
+            } else {
+                // Try JSON representation
+                if let data = try? JSONSerialization.data(withJSONObject: dictVal, options: .prettyPrinted),
+                   let str = String(data: data, encoding: .utf8) {
+                    value = str
+                } else {
+                    value = String(describing: dictVal)
+                }
+            }
+        } else {
+            value = ""
+        }
         valueEncoding = entry["valueEncoding"] as? String ?? ""
         valueType = entry["valueType"] as? String
         valueSize = (entry["valueSize"] as? NSNumber)?.intValue ?? 0
