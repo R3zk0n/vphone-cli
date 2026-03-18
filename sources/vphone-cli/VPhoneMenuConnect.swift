@@ -18,6 +18,11 @@ extension VPhoneMenuController {
         connectKeychainBrowserItem = keychainBrowser
         menu.addItem(keychainBrowser)
 
+        let xpcBrowser = makeItem("XPC Browser", action: #selector(openXPC))
+        xpcBrowser.isEnabled = false
+        connectXPCBrowserItem = xpcBrowser
+        menu.addItem(xpcBrowser)
+
         let devModeStatus = makeItem("Developer Mode Status", action: #selector(devModeStatus))
         devModeStatus.isEnabled = false
         connectDevModeStatusItem = devModeStatus
@@ -76,6 +81,7 @@ extension VPhoneMenuController {
     func updateConnectAvailability(available: Bool) {
         connectFileBrowserItem?.isEnabled = available
         connectKeychainBrowserItem?.isEnabled = available
+        connectXPCBrowserItem?.isEnabled = available
         connectDevModeStatusItem?.isEnabled = available
         connectPingItem?.isEnabled = available
         connectGuestVersionItem?.isEnabled = available
@@ -87,6 +93,10 @@ extension VPhoneMenuController {
 
     @objc func openKeychain() {
         onKeychainPressed?()
+    }
+
+    @objc func openXPC() {
+        onXPCPressed?()
     }
 
     @objc func devModeStatus() {

@@ -32,6 +32,7 @@
 #import "vphoned_protocol.h"
 #import "vphoned_settings.h"
 #import "vphoned_url.h"
+#import "vphoned_xpc.h"
 
 #ifndef AF_VSOCK
 #define AF_VSOCK 40
@@ -287,6 +288,7 @@ static BOOL handle_client(int fd) {
       [caps addObject:@"apps"];
     [caps addObject:@"url"];
     [caps addObject:@"settings"];
+    [caps addObject:@"xpc"];
 
     NSMutableDictionary *helloResp = [@{
       @"v" : @PROTOCOL_VERSION,
@@ -371,6 +373,14 @@ static BOOL handle_client(int fd) {
         // Settings operations
         if ([t hasPrefix:@"settings_"]) {
           NSDictionary *resp = vp_handle_settings_command(msg);
+          if (resp && !vp_write_message(fd, resp))
+            break;
+          continue;
+        }
+
+        // XPC research commands
+        if ([t hasPrefix:@"xpc_"]) {
+          NSDictionary *resp = vp_handle_xpc_command(msg);
           if (resp && !vp_write_message(fd, resp))
             break;
           continue;

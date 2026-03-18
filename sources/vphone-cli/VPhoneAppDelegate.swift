@@ -10,6 +10,7 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
     private var menuController: VPhoneMenuController?
     private var fileWindowController: VPhoneFileWindowController?
     private var keychainWindowController: VPhoneKeychainWindowController?
+    private var xpcWindowController: VPhoneXPCWindowController?
     private var appWindowController: VPhoneAppWindowController?
     private var locationProvider: VPhoneLocationProvider?
     private var sigintSource: DispatchSourceSignal?
@@ -110,6 +111,9 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
             let keychainWC = VPhoneKeychainWindowController()
             keychainWindowController = keychainWC
 
+            let xpcWC = VPhoneXPCWindowController()
+            xpcWindowController = xpcWC
+
             let appWC = VPhoneAppWindowController()
             appWindowController = appWC
 
@@ -124,6 +128,10 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
             mc.onKeychainPressed = { [weak keychainWC, weak control] in
                 guard let keychainWC, let control else { return }
                 keychainWC.showWindow(control: control)
+            }
+            mc.onXPCPressed = { [weak xpcWC, weak control] in
+                guard let xpcWC, let control else { return }
+                xpcWC.showWindow(control: control)
             }
             mc.onAppsPressed = { [weak appWC, weak control] in
                 guard let appWC, let control else { return }
