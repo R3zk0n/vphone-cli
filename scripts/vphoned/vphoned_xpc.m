@@ -13,16 +13,19 @@
 #import "vphoned_protocol.h"
 
 #import <Foundation/Foundation.h>
-#include <bootstrap.h>
 #include <xpc/xpc.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
+#include <pthread.h>
 #include <signal.h>
+#include <sys/wait.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 // MARK: - Private API declarations
 
-// bootstrap_look_up: resolve a Mach service name to a send right
+// bootstrap.h is macOS-only; declare what we need manually
+extern mach_port_t bootstrap_port;
 extern kern_return_t bootstrap_look_up(mach_port_t bp, const char *name, mach_port_t *sp);
 
 // xpc_connection introspection (private)
@@ -264,21 +267,87 @@ static NSArray *enumerate_mach_ports(void) {
     return ports;
 }
 
-// MARK: - XPC Monitor (os_log streaming)
+// MARK: - XPC Monitor (os_log streaming via posix_spawn)
+
+#include <spawn.h>
 
 /// Monitor state — accumulates XPC-related log entries in a ring buffer.
 static NSMutableArray *gXPCMonitorEntries = nil;
 static BOOL gXPCMonitorActive = NO;
-static NSTask *gLogStreamTask = nil;
-static NSPipe *gLogStreamPipe = nil;
+static pid_t gLogStreamPid = 0;
+static int gLogStreamReadFd = -1;
+static int gMonitorMaxEntries = 500;
 
-/// Start monitoring XPC messages via `log stream`.
+extern char **environ;
+
+/// Background reader thread — reads NDJSON from `log stream` stdout.
+static void *monitor_reader_thread(void *arg) {
+    @autoreleasepool {
+        int fd = gLogStreamReadFd;
+        // Line-buffered reading
+        char buf[8192];
+        NSMutableData *lineBuf = [NSMutableData data];
+
+        while (gXPCMonitorActive && fd >= 0) {
+            ssize_t n = read(fd, buf, sizeof(buf));
+            if (n <= 0) break;
+
+            [lineBuf appendBytes:buf length:n];
+
+            // Process complete lines
+            while (YES) {
+                const uint8_t *bytes = lineBuf.bytes;
+                NSUInteger len = lineBuf.length;
+                NSUInteger nlPos = NSNotFound;
+                for (NSUInteger i = 0; i < len; i++) {
+                    if (bytes[i] == '\n') { nlPos = i; break; }
+                }
+                if (nlPos == NSNotFound) break;
+
+                NSData *lineData = [lineBuf subdataWithRange:NSMakeRange(0, nlPos)];
+                [lineBuf replaceBytesInRange:NSMakeRange(0, nlPos + 1) withBytes:NULL length:0];
+
+                if (lineData.length == 0) continue;
+
+                @autoreleasepool {
+                    NSDictionary *entry = [NSJSONSerialization JSONObjectWithData:lineData options:0 error:nil];
+                    if (!entry) continue;
+
+                    NSMutableDictionary *parsed = [NSMutableDictionary dictionary];
+                    parsed[@"timestamp"] = entry[@"timestamp"] ?: @"";
+                    parsed[@"process"] = entry[@"processImagePath"] ?: entry[@"process"] ?: @"";
+                    parsed[@"pid"] = entry[@"processID"] ?: @0;
+                    parsed[@"subsystem"] = entry[@"subsystem"] ?: @"";
+                    parsed[@"category"] = entry[@"category"] ?: @"";
+                    parsed[@"message"] = entry[@"eventMessage"] ?: @"";
+                    parsed[@"type"] = entry[@"messageType"] ?: @"";
+
+                    NSString *procPath = parsed[@"process"];
+                    if ([procPath isKindOfClass:[NSString class]] && procPath.length > 0) {
+                        parsed[@"processName"] = [procPath lastPathComponent];
+                    }
+
+                    @synchronized (gXPCMonitorEntries) {
+                        [gXPCMonitorEntries addObject:parsed];
+                        while ((int)gXPCMonitorEntries.count > gMonitorMaxEntries) {
+                            [gXPCMonitorEntries removeObjectAtIndex:0];
+                        }
+                    }
+                }
+            }
+        }
+        NSLog(@"vphoned: xpc_monitor: reader thread exiting");
+    }
+    return NULL;
+}
+
+/// Start monitoring XPC messages via `log stream` (posix_spawn).
 static void start_xpc_monitor(NSString *filter, int maxEntries) {
     if (gXPCMonitorActive) return;
     gXPCMonitorActive = YES;
     gXPCMonitorEntries = [NSMutableArray array];
+    gMonitorMaxEntries = maxEntries > 0 ? maxEntries : 500;
 
-    // Use `log stream` with predicate filtering for XPC/Mach messages
     NSString *predicate = filter ?: @"subsystem == 'com.apple.xpc' OR "
                                      @"category == 'xpc' OR "
                                      @"subsystem == 'com.apple.launchd' OR "
@@ -286,73 +355,52 @@ static void start_xpc_monitor(NSString *filter, int maxEntries) {
                                      @"eventMessage CONTAINS 'mach_msg' OR "
                                      @"eventMessage CONTAINS 'bootstrap'";
 
-    gLogStreamPipe = [NSPipe pipe];
+    // Create pipe for stdout
+    int pipefds[2];
+    if (pipe(pipefds) != 0) {
+        NSLog(@"vphoned: xpc_monitor: pipe() failed: %s", strerror(errno));
+        gXPCMonitorActive = NO;
+        return;
+    }
 
-    gLogStreamTask = [[NSTask alloc] init];
-    gLogStreamTask.launchPath = @"/usr/bin/log";
-    gLogStreamTask.arguments = @[
-        @"stream",
-        @"--style", @"ndjson",
-        @"--predicate", predicate,
-        @"--level", @"debug",
-    ];
-    gLogStreamTask.standardOutput = gLogStreamPipe;
-    gLogStreamTask.standardError = [NSPipe pipe]; // discard stderr
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, pipefds[1], STDOUT_FILENO);
+    posix_spawn_file_actions_addclose(&actions, pipefds[0]);
+    posix_spawn_file_actions_addclose(&actions, pipefds[1]);
+    // Send stderr to /dev/null
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
 
-    NSFileHandle *fh = gLogStreamPipe.fileHandleForReading;
-    int limit = maxEntries > 0 ? maxEntries : 500;
-
-    // Read in background, parse JSON lines, accumulate
-    fh.readabilityHandler = ^(NSFileHandle *handle) {
-        NSData *data = handle.availableData;
-        if (data.length == 0) return;
-
-        NSString *chunk = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        if (!chunk) return;
-
-        // Parse NDJSON lines
-        NSArray *lines = [chunk componentsSeparatedByString:@"\n"];
-        for (NSString *line in lines) {
-            if (line.length == 0) continue;
-            NSData *lineData = [line dataUsingEncoding:NSUTF8StringEncoding];
-            if (!lineData) continue;
-
-            NSDictionary *entry = [NSJSONSerialization JSONObjectWithData:lineData options:0 error:nil];
-            if (!entry) continue;
-
-            NSMutableDictionary *parsed = [NSMutableDictionary dictionary];
-            parsed[@"timestamp"] = entry[@"timestamp"] ?: @"";
-            parsed[@"process"] = entry[@"processImagePath"] ?: entry[@"process"] ?: @"";
-            parsed[@"pid"] = entry[@"processID"] ?: @0;
-            parsed[@"subsystem"] = entry[@"subsystem"] ?: @"";
-            parsed[@"category"] = entry[@"category"] ?: @"";
-            parsed[@"message"] = entry[@"eventMessage"] ?: @"";
-            parsed[@"type"] = entry[@"messageType"] ?: @"";
-
-            // Extract process name from path
-            NSString *procPath = parsed[@"process"];
-            if ([procPath isKindOfClass:[NSString class]] && procPath.length > 0) {
-                parsed[@"processName"] = [procPath lastPathComponent];
-            }
-
-            @synchronized (gXPCMonitorEntries) {
-                [gXPCMonitorEntries addObject:parsed];
-                // Ring buffer: trim old entries
-                while ((int)gXPCMonitorEntries.count > limit) {
-                    [gXPCMonitorEntries removeObjectAtIndex:0];
-                }
-            }
-        }
+    const char *argv[] = {
+        "/usr/bin/log", "stream",
+        "--style", "ndjson",
+        "--predicate", predicate.UTF8String,
+        "--level", "debug",
+        NULL
     };
 
-    NSError *err = nil;
-    [gLogStreamTask launchAndReturnError:&err];
-    if (err) {
-        NSLog(@"vphoned: xpc_monitor: log stream launch failed: %@", err);
+    pid_t pid = 0;
+    int rc = posix_spawn(&pid, "/usr/bin/log", &actions, NULL, (char *const *)argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
+
+    close(pipefds[1]); // Close write end in parent
+
+    if (rc != 0) {
+        NSLog(@"vphoned: xpc_monitor: posix_spawn failed: %s", strerror(rc));
+        close(pipefds[0]);
         gXPCMonitorActive = NO;
-    } else {
-        NSLog(@"vphoned: xpc_monitor: started (predicate=%@)", predicate);
+        return;
     }
+
+    gLogStreamPid = pid;
+    gLogStreamReadFd = pipefds[0];
+
+    // Start reader thread
+    pthread_t thread;
+    pthread_create(&thread, NULL, monitor_reader_thread, NULL);
+    pthread_detach(thread);
+
+    NSLog(@"vphoned: xpc_monitor: started pid=%d (predicate=%@)", pid, predicate);
 }
 
 /// Stop the XPC monitor.
@@ -360,15 +408,17 @@ static void stop_xpc_monitor(void) {
     if (!gXPCMonitorActive) return;
     gXPCMonitorActive = NO;
 
-    if (gLogStreamTask && gLogStreamTask.isRunning) {
-        [gLogStreamTask terminate];
+    if (gLogStreamPid > 0) {
+        kill(gLogStreamPid, SIGTERM);
+        int status;
+        waitpid(gLogStreamPid, &status, 0);
+        gLogStreamPid = 0;
     }
-    gLogStreamTask = nil;
 
-    if (gLogStreamPipe) {
-        gLogStreamPipe.fileHandleForReading.readabilityHandler = nil;
+    if (gLogStreamReadFd >= 0) {
+        close(gLogStreamReadFd);
+        gLogStreamReadFd = -1;
     }
-    gLogStreamPipe = nil;
 
     NSLog(@"vphoned: xpc_monitor: stopped");
 }
