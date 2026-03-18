@@ -22,19 +22,43 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-// MARK: - Private API declarations
+// MARK: - Private API declarations (resolved via dlsym to bypass __IOS_UNAVAILABLE)
 
-// bootstrap.h is macOS-only; declare what we need manually
-extern mach_port_t bootstrap_port;
-extern kern_return_t bootstrap_look_up(mach_port_t bp, const char *name, mach_port_t *sp);
+// bootstrap
+static mach_port_t *g_bootstrap_port_ptr = NULL;
+static kern_return_t (*g_bootstrap_look_up)(mach_port_t, const char *, mach_port_t *) = NULL;
 
-// xpc_connection introspection (private)
-extern int xpc_connection_get_pid(xpc_connection_t conn);
-extern uid_t xpc_connection_get_euid(xpc_connection_t conn);
-extern au_asid_t xpc_connection_get_asid(xpc_connection_t conn);
+// xpc_connection
+static xpc_connection_t (*g_xpc_connection_create_mach_service)(const char *, dispatch_queue_t, uint64_t) = NULL;
+static pid_t (*g_xpc_connection_get_pid)(xpc_connection_t) = NULL;
+static uid_t (*g_xpc_connection_get_euid)(xpc_connection_t) = NULL;
+static int (*g_xpc_connection_get_asid)(xpc_connection_t) = NULL;
+static char *(*g_xpc_copy_description)(xpc_object_t) = NULL;
 
-// xpc_copy_description: human-readable dump of any xpc object
-extern char *xpc_copy_description(xpc_object_t obj);
+static BOOL g_xpc_apis_loaded = NO;
+
+__attribute__((constructor))
+static void load_xpc_apis(void) {
+    void *libxpc = dlopen("/usr/lib/system/libxpc.dylib", RTLD_LAZY);
+    void *liblaunchd = dlopen("/usr/lib/system/liblaunch.dylib", RTLD_LAZY);
+    void *libsystem = RTLD_DEFAULT;
+
+    g_bootstrap_port_ptr = dlsym(liblaunchd ?: libsystem, "bootstrap_port");
+    g_bootstrap_look_up = dlsym(liblaunchd ?: libsystem, "bootstrap_look_up");
+
+    if (libxpc) {
+        g_xpc_connection_create_mach_service = dlsym(libxpc, "xpc_connection_create_mach_service");
+        g_xpc_connection_get_pid = dlsym(libxpc, "xpc_connection_get_pid");
+        g_xpc_connection_get_euid = dlsym(libxpc, "xpc_connection_get_euid");
+        g_xpc_connection_get_asid = dlsym(libxpc, "xpc_connection_get_asid");
+        g_xpc_copy_description = dlsym(libxpc, "xpc_copy_description");
+    }
+
+    g_xpc_apis_loaded = (g_bootstrap_look_up != NULL);
+    NSLog(@"vphoned: xpc apis loaded: bootstrap=%s xpc_conn=%s",
+          g_bootstrap_look_up ? "yes" : "no",
+          g_xpc_connection_create_mach_service ? "yes" : "no");
+}
 
 // MARK: - Helpers
 
@@ -107,10 +131,14 @@ static pid_t pid_for_label(NSString *label) {
 
 /// Try bootstrap_look_up for a Mach service name.
 static NSDictionary *probe_service(NSString *serviceName) {
-    mach_port_t bp = bootstrap_port;
+    if (!g_bootstrap_look_up || !g_bootstrap_port_ptr) {
+        return @{@"service": serviceName, @"reachable": @NO, @"error": @"bootstrap API unavailable"};
+    }
+
+    mach_port_t bp = *g_bootstrap_port_ptr;
     mach_port_t sp = MACH_PORT_NULL;
 
-    kern_return_t kr = bootstrap_look_up(bp, serviceName.UTF8String, &sp);
+    kern_return_t kr = g_bootstrap_look_up(bp, serviceName.UTF8String, &sp);
 
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"service"] = serviceName;
@@ -149,7 +177,13 @@ static NSDictionary *try_xpc_connect(NSString *serviceName, double timeout) {
 
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 
-    xpc_connection_t conn = xpc_connection_create_mach_service(
+    if (!g_xpc_connection_create_mach_service) {
+        result[@"ok"] = @NO;
+        result[@"error"] = @"xpc_connection_create_mach_service unavailable";
+        return result;
+    }
+
+    xpc_connection_t conn = g_xpc_connection_create_mach_service(
         serviceName.UTF8String, NULL, 0);
 
     if (!conn) {
@@ -179,9 +213,9 @@ static NSDictionary *try_xpc_connect(NSString *serviceName, double timeout) {
     xpc_connection_resume(conn);
 
     // Get connection metadata
-    pid_t remote_pid = xpc_connection_get_pid(conn);
-    uid_t remote_euid = xpc_connection_get_euid(conn);
-    au_asid_t remote_asid = xpc_connection_get_asid(conn);
+    pid_t remote_pid = g_xpc_connection_get_pid ? g_xpc_connection_get_pid(conn) : 0;
+    uid_t remote_euid = g_xpc_connection_get_euid ? g_xpc_connection_get_euid(conn) : (uid_t)-1;
+    int remote_asid = g_xpc_connection_get_asid ? g_xpc_connection_get_asid(conn) : 0;
 
     result[@"remote_pid"] = @(remote_pid);
     result[@"remote_euid"] = @(remote_euid);
@@ -203,14 +237,14 @@ static NSDictionary *try_xpc_connect(NSString *serviceName, double timeout) {
                 }
                 result[@"ok"] = @NO;
             } else if (xpc_get_type(reply) == XPC_TYPE_DICTIONARY) {
-                char *desc = xpc_copy_description(reply);
+                char *desc = g_xpc_copy_description ? g_xpc_copy_description(reply) : NULL;
                 if (desc) {
                     result[@"reply"] = [NSString stringWithUTF8String:desc];
                     free(desc);
                 }
                 result[@"ok"] = @YES;
             } else {
-                char *desc = xpc_copy_description(reply);
+                char *desc = g_xpc_copy_description ? g_xpc_copy_description(reply) : NULL;
                 if (desc) {
                     result[@"reply"] = [NSString stringWithUTF8String:desc];
                     free(desc);
