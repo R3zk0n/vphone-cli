@@ -6,7 +6,7 @@ Investigation into app crashes when running WeChat and TikTok on the vphone virt
 
 ## Status
 
-**Phase:** Root cause confirmed via LLDB — AMFI constraint violation (exit status 45)
+**Phase:** Kernel patch implemented — AMFI entitlement constraint bypass (patch 26)
 
 ## Symptoms
 
@@ -106,21 +106,47 @@ WeChat is particularly affected because it ships ~20+ embedded dylibs (plugins) 
 | **B: Sign frameworks individually without entitlements** | After the per-bundle loop, enumerate all Mach-Os in `Frameworks/` and sign each with `-S` (no entitlements) explicitly | More control | More code, slower |
 | **C: Kernel/AMFI patch** | Patch AMFI to skip the "entitlements on non-main binary" constraint check | No re-signing changes needed | Broader security impact, may mask other issues |
 
-**Recommended: Option A** — minimal change to `vp_sign_app`, fixes the root cause at the signing stage.
+**Recommended: Option C (kernel patch)** — Options A/B failed because guest-side ldid doesn't reliably strip entitlements from frameworks during recursive signing. Kernel patch is the definitive fix.
 
 ## Investigation Plan
 
 1. ~~Collect crash logs~~ — AMFI constraint violations identified from kernel log
 2. ~~Identify crashing frameworks~~ — all embedded frameworks/dylibs affected
 2b. ~~LLDB confirmation~~ — exit status 45 confirms AMFI kill; dyld loads fine, killed post-load
-3. **Fix IPA signing pipeline** — strip entitlements from non-main binaries
-4. **Verify fix with WeChat** — re-install and confirm clean launch
-5. **Test with TikTok** — confirm same fix resolves TikTok crashes
-6. **Check for secondary issues** — VM detection, GPU, network (may surface after AMFI fix)
+3. ~~Signing pipeline fix attempted~~ — Options A/B did not resolve (ldid recursive sign doesn't strip framework entitlements reliably)
+4. ~~IDA analysis of AMFI kext~~ — identified constraint check function and patch point
+5. ~~Kernel patch implemented~~ — patch 26: B.CC → B at version gate
+6. **Verify fix with WeChat** — re-patch kernel, restore, install, test
+7. **Test with TikTok** — confirm same fix resolves TikTok crashes
+8. **Check for secondary issues** — VM detection, GPU, network (may surface after AMFI fix)
 
 ## Fixes Applied
 
-_(pending — fix not yet implemented)_
+### Kernel Patch 26: AMFI Entitlement Constraint Bypass
+
+**File:** `sources/FirmwarePatcher/Kernel/Patches/KernelPatchAmfiEntitlementConstraint.swift`
+
+**IDA Analysis:**
+
+Function `sub_FFFFFE00086442F8` in `com.apple.driver.AppleMobileFileIntegrity` kext handles entitlement validation during code signature verification. The constraint check flow:
+
+```
+0xfffffe000864444c  REV     W9, W25          ; byte-swap code signing version
+0xfffffe0008644450  LSR     W9, W9, #0xA     ; extract version field
+0xfffffe0008644454  CMP     W9, #0x81        ; version threshold (new format)
+0xfffffe0008644458  B.CC    0xfffffe00086444B4  ← PATCH: B.CC → B (unconditional)
+0xfffffe000864445c  ADD     X9, X24, #0x50
+0xfffffe0008644460  LDRB    W9, [X9,#7]      ; isMainBinary flag
+0xfffffe0008644464  TBNZ    W9, #0, 0xfffffe00086444B4  ; main binary → parse entitlements
+                    ; --- falls through: NOT main binary → constraint violation ---
+0xfffffe00086444a4  ADRL    X0, "AMFI: constraint violation %s has entitlements..."
+0xfffffe00086444ac  BL      log
+0xfffffe00086444b0  B       0xfffffe00086443F0  ; skip entitlement parsing (reject)
+```
+
+**Patch:** Change `B.CC` at `0xfffffe0008644458` to unconditional `B` to same target (`0xfffffe00086444B4`). This sends all binaries — regardless of code signing version or main-binary flag — to the entitlement parsing path. Non-main binaries with entitlements are no longer rejected.
+
+**Strategy:** String anchor (`"AMFI: constraint violation %s has entitlements but is not a main binary"`) → ADRP+ADD xref → walk backward for `CMP Wn, #0x81` + `B.CC` pattern → patch conditional to unconditional.
 
 ## References
 
@@ -128,3 +154,13 @@ _(pending — fix not yet implemented)_
 - TikTok binary: `com.zhiliaoapp.musically`
 - IPA signing code: `scripts/vphoned/vphoned_install.m` — `vp_sign_app()` (line 316), `vp_sign_binary()` (line 268)
 - AMFI launch constraint: non-main binaries must not carry entitlements in ad-hoc signatures
+
+
+
+## Side Notes 
+
+_(Side Notes)_
+
+* AMFI is being used when invoked due to the main binary being signed and when new binaries get loaded the signature isnt loaded.
+
+

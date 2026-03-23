@@ -71,6 +71,7 @@
 | 15    | `mov w0,#0`                | `_handle_fsioc_graft`            | Allow fsioc graft                                  |    Y    |  Y  |  Y  |
 | 16    | NOP (3x)                   | `handle_get_dev_by_role`         | Bypass APFS role-lookup deny gates for boot mounts |    Y    |  Y  |  Y  |
 | 17-26 | `mov x0,#0; ret` (5 hooks) | Sandbox MACF ops table           | Stub 5 sandbox hooks                               |    Y    |  Y  |  Y  |
+| 27    | `B.CC` → `B`                | AMFI entitlement constraint      | Allow non-main binaries with entitlements (WeChat/TikTok fix) |    Y    |  Y  |  Y  |
 
 ### JB-Only Kernel Methods (Reference List)
 

@@ -1,4 +1,4 @@
-// KernelPatcher.swift — Regular kernel patcher orchestrator (26 patches).
+// KernelPatcher.swift — Regular kernel patcher orchestrator (27 patches).
 //
 // Historical note: this file replaces the old Python firmware patcher implementation.
 // Each patch method is defined as an extension in its own file under Patches/.
@@ -35,6 +35,7 @@ public final class KernelPatcher: KernelPatcherBase, Patcher {
         patchApfsGraft() // 12
         patchApfsMount() // 13-15
         patchSandbox() // 16-25
+        patchAmfiEntitlementConstraint() // 26
 
         return patches
     }
