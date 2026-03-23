@@ -303,6 +303,10 @@
 	<true/>
 	<key>com.apple.private.system-keychain</key>
 	<true/>
+	<key>com.apple.private.logging.diagnostic</key>
+	<true/>
+	<key>com.apple.private.logging.admin</key>
+	<true/>
 	<key>com.apple.private.usernotifications.bundle-identifiers</key>
 	<true/>
 	<key>com.apple.private.usernotifications.settings</key>

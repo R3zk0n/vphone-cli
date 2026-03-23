@@ -419,9 +419,9 @@ class VPhoneControl {
         _ = try await sendRequest(["t": "file_rename", "from": from, "to": to])
     }
 
-    func installIPA(localURL: URL) async throws -> String {
+    func installIPA(localURL: URL, stripFrameworkEntitlements: Bool = false) async throws -> String {
         do {
-            return try await installIPAWithBuiltInInstaller(localURL: localURL)
+            return try await installIPAWithBuiltInInstaller(localURL: localURL, stripFrameworkEntitlements: stripFrameworkEntitlements)
         } catch let ControlError.guestError(message) where message == "unknown type: ipa_install" {
             throw ControlError.guestError(
                 "Guest vphoned does not support ipa_install yet. Reconnect or reboot the guest so the updated daemon can take over."
@@ -429,7 +429,7 @@ class VPhoneControl {
         }
     }
 
-    private func installIPAWithBuiltInInstaller(localURL: URL) async throws -> String {
+    private func installIPAWithBuiltInInstaller(localURL: URL, stripFrameworkEntitlements: Bool) async throws -> String {
         let data: Data
         do {
             data = try Data(contentsOf: localURL)
@@ -458,6 +458,10 @@ class VPhoneControl {
             "path": remotePath,
             "registration": "User",
         ]
+
+        if stripFrameworkEntitlements {
+            request["strip_framework_entitlements"] = true
+        }
 
         if let signCertURL = Self.signCertURL() {
             let signCertData = try Data(contentsOf: signCertURL)

@@ -311,8 +311,24 @@ static BOOL gXPCMonitorActive = NO;
 static pid_t gLogStreamPid = 0;
 static int gLogStreamReadFd = -1;
 static int gMonitorMaxEntries = 500;
+static NSString *gMonitorError = nil;
+static int gMonitorRawLines = 0;  // count of raw lines read (for diagnostics)
 
 extern char **environ;
+
+/// Find the `log` binary on the device.
+static const char *find_log_binary(void) {
+    static const char *candidates[] = {
+        "/usr/bin/log",
+        "/usr/local/bin/log",
+        "/var/jb/usr/bin/log",
+        NULL
+    };
+    for (int i = 0; candidates[i]; i++) {
+        if (access(candidates[i], X_OK) == 0) return candidates[i];
+    }
+    return NULL;
+}
 
 /// Background reader thread — reads NDJSON from `log stream` stdout.
 static void *monitor_reader_thread(void *arg) {
@@ -342,10 +358,21 @@ static void *monitor_reader_thread(void *arg) {
                 [lineBuf replaceBytesInRange:NSMakeRange(0, nlPos + 1) withBytes:NULL length:0];
 
                 if (lineData.length == 0) continue;
+                gMonitorRawLines++;
 
                 @autoreleasepool {
                     NSDictionary *entry = [NSJSONSerialization JSONObjectWithData:lineData options:0 error:nil];
-                    if (!entry) continue;
+                    if (!entry) {
+                        // Not JSON — likely an error message from `log` itself
+                        NSString *errLine = [[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding];
+                        if (errLine) {
+                            NSLog(@"vphoned: xpc_monitor: non-json: %@", errLine);
+                            @synchronized (gXPCMonitorEntries) {
+                                if (!gMonitorError) gMonitorError = errLine;
+                            }
+                        }
+                        continue;
+                    }
 
                     NSMutableDictionary *parsed = [NSMutableDictionary dictionary];
                     parsed[@"timestamp"] = entry[@"timestamp"] ?: @"";
@@ -381,18 +408,32 @@ static void start_xpc_monitor(NSString *filter, int maxEntries) {
     gXPCMonitorActive = YES;
     gXPCMonitorEntries = [NSMutableArray array];
     gMonitorMaxEntries = maxEntries > 0 ? maxEntries : 500;
+    gMonitorError = nil;
+    gMonitorRawLines = 0;
+
+    // Find the log binary
+    const char *logBin = find_log_binary();
+    if (!logBin) {
+        NSLog(@"vphoned: xpc_monitor: cannot find 'log' binary");
+        gMonitorError = @"cannot find 'log' binary in /usr/bin, /usr/local/bin, /var/jb/usr/bin";
+        gXPCMonitorActive = NO;
+        return;
+    }
+    NSLog(@"vphoned: xpc_monitor: using log binary: %s", logBin);
 
     NSString *predicate = filter ?: @"subsystem == 'com.apple.xpc' OR "
                                      @"category == 'xpc' OR "
                                      @"subsystem == 'com.apple.launchd' OR "
-                                     @"eventMessage CONTAINS 'xpc_connection' OR "
-                                     @"eventMessage CONTAINS 'mach_msg' OR "
-                                     @"eventMessage CONTAINS 'bootstrap'";
+                                     @"subsystem CONTAINS 'xpc' OR "
+                                     @"eventMessage CONTAINS[c] 'xpc' OR "
+                                     @"eventMessage CONTAINS[c] 'mach' OR "
+                                     @"eventMessage CONTAINS[c] 'bootstrap'";
 
-    // Create pipe for stdout
+    // Create pipe for stdout+stderr (merged so we capture error messages)
     int pipefds[2];
     if (pipe(pipefds) != 0) {
         NSLog(@"vphoned: xpc_monitor: pipe() failed: %s", strerror(errno));
+        gMonitorError = [NSString stringWithFormat:@"pipe() failed: %s", strerror(errno)];
         gXPCMonitorActive = NO;
         return;
     }
@@ -400,13 +441,12 @@ static void start_xpc_monitor(NSString *filter, int maxEntries) {
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
     posix_spawn_file_actions_adddup2(&actions, pipefds[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, pipefds[1], STDERR_FILENO);
     posix_spawn_file_actions_addclose(&actions, pipefds[0]);
     posix_spawn_file_actions_addclose(&actions, pipefds[1]);
-    // Send stderr to /dev/null
-    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
 
     const char *argv[] = {
-        "/usr/bin/log", "stream",
+        logBin, "stream",
         "--style", "ndjson",
         "--predicate", predicate.UTF8String,
         "--level", "debug",
@@ -414,13 +454,14 @@ static void start_xpc_monitor(NSString *filter, int maxEntries) {
     };
 
     pid_t pid = 0;
-    int rc = posix_spawn(&pid, "/usr/bin/log", &actions, NULL, (char *const *)argv, environ);
+    int rc = posix_spawn(&pid, logBin, &actions, NULL, (char *const *)argv, environ);
     posix_spawn_file_actions_destroy(&actions);
 
     close(pipefds[1]); // Close write end in parent
 
     if (rc != 0) {
-        NSLog(@"vphoned: xpc_monitor: posix_spawn failed: %s", strerror(rc));
+        NSLog(@"vphoned: xpc_monitor: posix_spawn failed: %s (bin=%s)", strerror(rc), logBin);
+        gMonitorError = [NSString stringWithFormat:@"posix_spawn failed: %s (bin=%s)", strerror(rc), logBin];
         close(pipefds[0]);
         gXPCMonitorActive = NO;
         return;
@@ -434,7 +475,7 @@ static void start_xpc_monitor(NSString *filter, int maxEntries) {
     pthread_create(&thread, NULL, monitor_reader_thread, NULL);
     pthread_detach(thread);
 
-    NSLog(@"vphoned: xpc_monitor: started pid=%d (predicate=%@)", pid, predicate);
+    NSLog(@"vphoned: xpc_monitor: started pid=%d bin=%s (predicate=%@)", pid, logBin, predicate);
 }
 
 /// Stop the XPC monitor.
@@ -639,6 +680,10 @@ NSDictionary *vp_handle_xpc_command(NSDictionary *msg) {
 
         NSMutableDictionary *r = vp_make_response(@"xpc_monitor_start", reqId);
         r[@"ok"] = @(gXPCMonitorActive);
+        r[@"pid"] = @(gLogStreamPid);
+        const char *logBin = find_log_binary();
+        if (logBin) r[@"log_binary"] = [NSString stringWithUTF8String:logBin];
+        if (gMonitorError) r[@"error"] = gMonitorError;
         return r;
     }
 
@@ -657,6 +702,9 @@ NSDictionary *vp_handle_xpc_command(NSDictionary *msg) {
         r[@"entries"] = entries;
         r[@"count"] = @(entries.count);
         r[@"active"] = @(gXPCMonitorActive);
+        r[@"raw_lines"] = @(gMonitorRawLines);
+        r[@"pid"] = @(gLogStreamPid);
+        if (gMonitorError) r[@"error"] = gMonitorError;
         return r;
     }
 

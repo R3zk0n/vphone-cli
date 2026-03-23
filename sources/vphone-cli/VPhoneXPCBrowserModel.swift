@@ -25,6 +25,9 @@ class VPhoneXPCBrowserModel {
     var isMonitoring = false
     var monitorFilter = ""
     var monitorPollTimer: Timer?
+    var monitorError: String?
+    var monitorRawLines = 0
+    var monitorPid = 0
 
     init(control: VPhoneControl) {
         self.control = control
@@ -166,6 +169,9 @@ class VPhoneXPCBrowserModel {
         guard !isMonitoring else { return }
         isMonitoring = true
         monitorEntries = []
+        monitorError = nil
+        monitorRawLines = 0
+        monitorPid = 0
 
         Task {
             var req: [String: Any] = ["t": "xpc_monitor_start"]
@@ -211,6 +217,12 @@ class VPhoneXPCBrowserModel {
                 // Trim to 2000
                 if monitorEntries.count > 2000 {
                     monitorEntries.removeFirst(monitorEntries.count - 2000)
+                }
+                // Capture diagnostics
+                monitorRawLines = (resp["raw_lines"] as? NSNumber)?.intValue ?? monitorRawLines
+                monitorPid = (resp["pid"] as? NSNumber)?.intValue ?? monitorPid
+                if let err = resp["error"] as? String {
+                    monitorError = err
                 }
             } catch {
                 // Ignore poll errors

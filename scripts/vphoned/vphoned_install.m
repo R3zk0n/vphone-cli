@@ -313,7 +313,7 @@ static int vp_sign_binary(
     return ret;
 }
 
-static int vp_sign_app(NSString *appPath, NSString *certPath, NSString *ldidPath, NSString **errorOutput) {
+static int vp_sign_app(NSString *appPath, NSString *certPath, NSString *ldidPath, BOOL stripFrameworkEntitlements, NSString **errorOutput) {
     if (!vp_info_dictionary_for_app_path(appPath)) {
         if (errorOutput) *errorOutput = @"missing app Info.plist";
         return 172;
@@ -394,8 +394,12 @@ static int vp_sign_app(NSString *appPath, NSString *certPath, NSString *ldidPath
         }
     }
 
+    NSDictionary *recursiveEntitlements = nil;
+    if (stripFrameworkEntitlements) {
+        recursiveEntitlements = @{};
+    }
     NSString *recursiveOutput = @"";
-    int recursiveRet = vp_sign_binary(appPath, nil, certPath, ldidPath, &recursiveOutput);
+    int recursiveRet = vp_sign_binary(appPath, recursiveEntitlements, certPath, ldidPath, &recursiveOutput);
     if (recursiveRet != 0) {
         if (errorOutput) *errorOutput = recursiveOutput;
         return 173;
@@ -657,6 +661,7 @@ static int vp_install_app_from_package(
     BOOL forceSystem,
     NSString *certPath,
     NSString *ldidPath,
+    BOOL stripFrameworkEntitlements,
     NSString **detailOutput
 ) {
     NSString *appPayloadPath = [appPackagePath stringByAppendingPathComponent:@"Payload"];
@@ -678,7 +683,7 @@ static int vp_install_app_from_package(
     }
 
     NSString *signOutput = @"";
-    int signRet = vp_sign_app(appBundleToInstallPath, certPath, ldidPath, &signOutput);
+    int signRet = vp_sign_app(appBundleToInstallPath, certPath, ldidPath, stripFrameworkEntitlements, &signOutput);
     if (signRet != 0) {
         if (detailOutput) *detailOutput = signOutput;
         return signRet;
@@ -766,6 +771,7 @@ NSDictionary *vp_handle_custom_install(NSDictionary *msg) {
     NSString *ipaPath = msg[@"path"];
     NSString *registration = msg[@"registration"];
     NSString *certPath = msg[@"cert_path"];
+    BOOL stripFrameworkEntitlements = [msg[@"strip_framework_entitlements"] boolValue];
     NSString *ldidPath = vp_find_ldid_path();
     BOOL forceSystem = [registration isEqualToString:@"System"];
 
@@ -808,7 +814,7 @@ NSDictionary *vp_handle_custom_install(NSDictionary *msg) {
     int extractRet = vp_extract_package_to_directory(ipaPath, tmpPackagePath, &detail);
     int installRet = 0;
     if (extractRet == 0) {
-        installRet = vp_install_app_from_package(tmpPackagePath, forceSystem, certPath, ldidPath, &detail);
+        installRet = vp_install_app_from_package(tmpPackagePath, forceSystem, certPath, ldidPath, stripFrameworkEntitlements, &detail);
     }
 
     [[NSFileManager defaultManager] removeItemAtPath:tmpPackagePath error:nil];

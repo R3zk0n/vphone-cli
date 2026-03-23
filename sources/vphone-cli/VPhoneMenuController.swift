@@ -38,6 +38,8 @@ class VPhoneMenuController {
     var screenRecorder: VPhoneScreenRecorder?
     var recordingItem: NSMenuItem?
     weak var captureView: VPhoneVirtualMachineView?
+    var stripFrameworkEntitlements = true
+    var stripFrameworkEntitlementsItem: NSMenuItem?
     var batterySyncEnabled = false
     var batterySyncStatusItem: NSMenuItem?
     var batteryLevelMenuItems: [NSMenuItem] = []

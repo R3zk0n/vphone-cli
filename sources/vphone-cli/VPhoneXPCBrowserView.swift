@@ -195,13 +195,22 @@ struct VPhoneXPCBrowserView: View {
                 Circle()
                     .fill(.red)
                     .frame(width: 6, height: 6)
-                Text("Monitoring")
+                Text("Monitoring (pid \(model.monitorPid))")
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
+                Text("raw:\(model.monitorRawLines)")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.tertiary)
             }
             Text("\(filteredMonitorEntries.count) entries")
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
+            if let err = model.monitorError {
+                Text(err)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+            }
             Spacer()
         }
         .padding(.horizontal, 8)

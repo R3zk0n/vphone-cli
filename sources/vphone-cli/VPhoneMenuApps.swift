@@ -28,6 +28,13 @@ extension VPhoneMenuController {
         installPackageItem = install
         menu.addItem(install)
 
+        menu.addItem(NSMenuItem.separator())
+
+        let stripItem = makeItem("Strip Framework Entitlements", action: #selector(toggleStripFrameworkEntitlements))
+        stripItem.state = stripFrameworkEntitlements ? .on : .off
+        stripFrameworkEntitlementsItem = stripItem
+        menu.addItem(stripItem)
+
         item.submenu = menu
         return item
     }
@@ -67,7 +74,7 @@ extension VPhoneMenuController {
 
         Task {
             do {
-                let result = try await control.installIPA(localURL: url)
+                let result = try await control.installIPA(localURL: url, stripFrameworkEntitlements: stripFrameworkEntitlements)
                 print("[install] \(result)")
                 showAlert(
                     title: "Install App Package",
@@ -81,6 +88,12 @@ extension VPhoneMenuController {
                 showAlert(title: "Install App Package", message: "\(error)", style: .warning)
             }
         }
+    }
+
+    @objc func toggleStripFrameworkEntitlements() {
+        stripFrameworkEntitlements.toggle()
+        stripFrameworkEntitlementsItem?.state = stripFrameworkEntitlements ? .on : .off
+        print("[install] strip framework entitlements: \(stripFrameworkEntitlements ? "on" : "off")")
     }
 
     @objc func openURL() {
