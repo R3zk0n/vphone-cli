@@ -149,6 +149,30 @@ build_tweakloader() {
     echo "$out"
 }
 
+build_tweak() {
+    local name="$1"
+    local src="$SCRIPT_DIR/tweakloader/${name}.m"
+    local out="$TEMP_DIR/${name}.dylib"
+    local sdk cc
+
+    [[ -f "$src" ]] || die "Missing tweak source at $src"
+
+    sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+    cc="$(xcrun --sdk iphoneos -f clang)"
+
+    "$cc" -isysroot "$sdk" \
+        -arch arm64 -arch arm64e \
+        -miphoneos-version-min=15.0 \
+        -dynamiclib \
+        -fobjc-arc -O3 \
+        -framework Foundation \
+        -o "$out" \
+        "$src"
+
+    ldid_sign "$out"
+    echo "$out"
+}
+
 remote_mount() {
     local dev="$1" mnt="$2" opts="${3:-rw}"
     ssh_cmd "/bin/mkdir -p $mnt"
@@ -370,6 +394,28 @@ ssh_cmd "/usr/sbin/chown 0:0 /mnt5/$BOOT_HASH/$JB_DIR_NAME/procursus/usr/lib/Twe
 ssh_cmd "/bin/chmod 0755 /mnt5/$BOOT_HASH/$JB_DIR_NAME/procursus/usr/lib/TweakLoader.dylib"
 
 echo "  [+] TweakLoader installed to procursus/usr/lib/TweakLoader.dylib"
+
+# ═══════════ JB-4 BUILD AND DEPLOY TWEAKS ═══════════════════════
+echo ""
+echo "[JB-4] Building and installing tweaks..."
+
+TWEAK_DST="/mnt5/$BOOT_HASH/$JB_DIR_NAME/procursus/Library/MobileSubstrate/DynamicLibraries"
+ssh_cmd "/bin/mkdir -p $TWEAK_DST"
+
+for tweak_plist in "$SCRIPT_DIR"/tweakloader/*.plist; do
+    [[ -f "$tweak_plist" ]] || continue
+    tweak_name="$(basename "${tweak_plist%.plist}")"
+    tweak_src="$SCRIPT_DIR/tweakloader/${tweak_name}.m"
+    [[ -f "$tweak_src" ]] || continue
+
+    echo "  Building $tweak_name..."
+    tweak_dylib="$(build_tweak "$tweak_name")"
+    scp_to "$tweak_dylib" "$TWEAK_DST/${tweak_name}.dylib"
+    scp_to "$tweak_plist" "$TWEAK_DST/${tweak_name}.plist"
+    ssh_cmd "/bin/chmod 0755 $TWEAK_DST/${tweak_name}.dylib"
+    ssh_cmd "/bin/chmod 0644 $TWEAK_DST/${tweak_name}.plist"
+    echo "  [+] $tweak_name installed"
+done
 
 # ═══════════ JB-5 DEPLOY FIRST-BOOT SETUP ══════════════════════
 echo ""
