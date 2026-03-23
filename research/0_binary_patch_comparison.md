@@ -72,6 +72,7 @@
 | 16    | NOP (3x)                   | `handle_get_dev_by_role`         | Bypass APFS role-lookup deny gates for boot mounts |    Y    |  Y  |  Y  |
 | 17-26 | `mov x0,#0; ret` (5 hooks) | Sandbox MACF ops table           | Stub 5 sandbox hooks                               |    Y    |  Y  |  Y  |
 | 27    | `B.CC` → `B`                | AMFI entitlement constraint      | Allow non-main binaries with entitlements (WeChat/TikTok fix) |    Y    |  Y  |  Y  |
+| 28    | `B.NE` → `B`                | AMFI OSEntitlements consistency   | Skip context mismatch panic (instance=NULL, monitor!=NULL)    |    Y    |  Y  |  Y  |
 
 ### JB-Only Kernel Methods (Reference List)
 
@@ -168,9 +169,9 @@
 
 | Variant       | Pre-step            | `Ramdisk/txm.img4`               | `Ramdisk/krnl.ramdisk.img4`                                                      | `Ramdisk/krnl.img4`                       | Effective kernel used by `ramdisk_send.sh`          |
 | ------------- | ------------------- | -------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------- |
-| `RAMDISK`     | `make fw_patch`     | release TXM + base TXM patch (1) | base kernel (28), legacy `*.ramdisk` preferred else derive from pristine CloudOS | restore kernel from `fw_patch` (28)       | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
-| `DEV+RAMDISK` | `make fw_patch_dev` | release TXM + base TXM patch (1) | base kernel (28), same derivation rule                                           | restore kernel from `fw_patch_dev` (28)   | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
-| `JB+RAMDISK`  | `make fw_patch_jb`  | release TXM + base TXM patch (1) | base kernel (28), same derivation rule                                           | restore kernel from `fw_patch_jb` (28+59) | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
+| `RAMDISK`     | `make fw_patch`     | release TXM + base TXM patch (1) | base kernel (29), legacy `*.ramdisk` preferred else derive from pristine CloudOS | restore kernel from `fw_patch` (29)       | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
+| `DEV+RAMDISK` | `make fw_patch_dev` | release TXM + base TXM patch (1) | base kernel (29), same derivation rule                                           | restore kernel from `fw_patch_dev` (29)   | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
+| `JB+RAMDISK`  | `make fw_patch_jb`  | release TXM + base TXM patch (1) | base kernel (29), same derivation rule                                           | restore kernel from `fw_patch_jb` (29+59) | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
 
 ## Cross-Version Dynamic Snapshot
 
