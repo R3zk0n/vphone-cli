@@ -325,6 +325,25 @@ static int vp_sign_app(NSString *appPath, NSString *certPath, NSString *ldidPath
         return 174;
     }
 
+    // Step 1: Recursive sign on entire .app directory.
+    // When stripping framework entitlements, pass an empty dict to clear all
+    // entitlements from every Mach-O (frameworks, dylibs, and main binary).
+    // The per-bundle pass below will then restore correct entitlements on
+    // main executables, so the order matters: recursive first, per-bundle second.
+    NSDictionary *recursiveEntitlements = nil;
+    if (stripFrameworkEntitlements) {
+        recursiveEntitlements = @{};
+    }
+    NSString *recursiveOutput = @"";
+    int recursiveRet = vp_sign_binary(appPath, recursiveEntitlements, certPath, ldidPath, &recursiveOutput);
+    if (recursiveRet != 0) {
+        if (errorOutput) *errorOutput = recursiveOutput;
+        return 173;
+    }
+
+    // Step 2: Per-bundle signing — iterate Info.plist files and sign each
+    // non-framework bundle executable with proper entitlements. This overwrites
+    // the recursive sign for main executables, restoring their entitlements.
     NSURL *fileURL = nil;
     NSDirectoryEnumerator *enumerator = [[NSFileManager defaultManager]
         enumeratorAtURL:[NSURL fileURLWithPath:appPath]
@@ -394,16 +413,6 @@ static int vp_sign_app(NSString *appPath, NSString *certPath, NSString *ldidPath
         }
     }
 
-    NSDictionary *recursiveEntitlements = nil;
-    if (stripFrameworkEntitlements) {
-        recursiveEntitlements = @{};
-    }
-    NSString *recursiveOutput = @"";
-    int recursiveRet = vp_sign_binary(appPath, recursiveEntitlements, certPath, ldidPath, &recursiveOutput);
-    if (recursiveRet != 0) {
-        if (errorOutput) *errorOutput = recursiveOutput;
-        return 173;
-    }
     return 0;
 }
 
