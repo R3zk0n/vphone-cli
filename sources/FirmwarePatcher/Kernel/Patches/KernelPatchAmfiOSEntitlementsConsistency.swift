@@ -51,10 +51,12 @@ extension KernelPatcher {
         }
 
         // Step 3: Walk backward from each xref's ADRP to find the B.NE.
-        // The pattern within ~0x40 bytes before the string ref is:
+        // The B.NE is ~0xB4 bytes before the ADRP (the panic path has several
+        // STP/CSET/MOV instructions between the B.NE and the string load).
+        // Pattern before the string ref:
         //   CMP  X_, #0; CSET W8, NE; CMP  X_, #0; CSET W9, NE; CMP W8, W9; B.NE <panic>
         for (adrpOff, _) in refs {
-            let scanStart = max(adrpOff - 0x60, amfiRange.start)
+            let scanStart = max(adrpOff - 0x120, amfiRange.start)
             for off in stride(from: adrpOff - 4, through: scanStart, by: -4) {
                 let insns = disasm.disassemble(in: buffer.data, at: off, count: 1)
                 guard let insn = insns.first else { continue }
