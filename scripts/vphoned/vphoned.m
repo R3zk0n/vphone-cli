@@ -159,6 +159,11 @@ static NSDictionary *handle_command(NSDictionary *msg) {
     return vp_make_response(@"ok", reqId);
   }
 
+  if ([type isEqualToString:@"shake"]) {
+    vp_hid_shake();
+    return vp_make_response(@"ok", reqId);
+  }
+
   if ([type isEqualToString:@"devmode"]) {
     if (!vp_devmode_available()) {
       NSMutableDictionary *r = vp_make_response(@"err", reqId);

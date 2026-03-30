@@ -269,6 +269,20 @@ class VPhoneControl {
         sendHID(page: page, usage: usage, down: false)
     }
 
+    func sendShake() {
+        nextRequestId += 1
+        let msg: [String: Any] = [
+            "v": Self.protocolVersion,
+            "t": "shake",
+            "id": String(nextRequestId, radix: 16),
+        ]
+        guard let fd = connection?.fileDescriptor, writeMessage(fd: fd, dict: msg) else {
+            print("[control] send failed (not connected)")
+            return
+        }
+        print("[control] shake")
+    }
+
     private func sendHID(page: UInt32, usage: UInt32, down: Bool?) {
         nextRequestId += 1
         var msg: [String: Any] = [

@@ -16,3 +16,6 @@ void vp_hid_press(uint32_t page, uint32_t usage);
 
 /// Send a single key down or key up event.
 void vp_hid_key(uint32_t page, uint32_t usage, BOOL down);
+
+/// Simulate a device shake (rapid accelerometer oscillation).
+void vp_hid_shake(void);

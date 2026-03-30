@@ -12,6 +12,7 @@ extension VPhoneMenuController {
         menu.addItem(makeItem("Volume Up", action: #selector(sendVolumeUp)))
         menu.addItem(makeItem("Volume Down", action: #selector(sendVolumeDown)))
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(makeItem("Shake Device", action: #selector(sendShake)))
         menu.addItem(makeItem("Spotlight (Cmd+Space)", action: #selector(sendSpotlight)))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(makeItem("Type ASCII from Clipboard", action: #selector(typeFromClipboard)))
@@ -44,6 +45,10 @@ extension VPhoneMenuController {
 
     @objc func sendVolumeDown() {
         keyHelper.sendVolumeDown()
+    }
+
+    @objc func sendShake() {
+        keyHelper.sendShake()
     }
 
     @objc func sendSpotlight() {

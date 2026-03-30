@@ -79,6 +79,13 @@ class VPhoneKeyHelper {
         control.sendHIDPress(page: 0x0C, usage: 0xEA)
     }
 
+    // MARK: - Motion
+
+    func sendShake() {
+        guard requireConnection() else { return }
+        control.sendShake()
+    }
+
     // MARK: - Combos
 
     func sendSpotlight() {
