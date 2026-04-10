@@ -24,6 +24,7 @@ public final class FirmwarePipeline {
     // MARK: - Variant
 
     public enum Variant: String, Sendable {
+        case less
         case regular
         case dev
         case jb
@@ -136,6 +137,10 @@ public final class FirmwarePipeline {
                 componentRecords.append(contentsOf: records)
                 if let deviceTreePatcher = patcher as? DeviceTreePatcher {
                     currentData = deviceTreePatcher.patchedData
+                } else if let filesystemPatcher = patcher as? CryptexFilesystemPatcher {
+                    currentData = filesystemPatcher.patchedData
+                } else if let manifestPatcher = patcher as? ManifestHashPatcher {
+                    currentData = manifestPatcher.patchedData
                 } else {
                     for record in records {
                         let range = record.fileOffset ..< record.fileOffset + record.patchedBytes.count
@@ -168,9 +173,16 @@ public final class FirmwarePipeline {
             name: "AVPBooter",
             inRestoreDir: false,
             searchPatterns: ["AVPBooter*.bin"],
-            patcherFactories: [{ data, verbose in
-                AVPBooterPatcher(data: data, verbose: verbose)
-            }]
+            patcherFactories: {
+                if variant != .less {
+                    return [
+                        { data, verbose in
+                            AVPBooterPatcher(data: data, verbose: verbose)
+                        },
+                    ]
+                }
+                return []
+            }()
         ))
 
         // 2. iBSS — JB variant runs the base iBSS patcher, then the nonce-skip extension.
@@ -179,8 +191,15 @@ public final class FirmwarePipeline {
             inRestoreDir: true,
             searchPatterns: ["Firmware/dfu/iBSS.vresearch101.RELEASE.im4p"],
             patcherFactories: {
-                if variant == .jb {
-                    return [
+                return switch variant {
+                case .less:
+                    []
+                case .regular, .dev:
+                    [{ data, verbose in
+                        IBootPatcher(data: data, mode: .ibss, verbose: verbose)
+                    }]
+                case .jb:
+                    [
                         { data, verbose in
                             IBootPatcher(data: data, mode: .ibss, verbose: verbose)
                         },
@@ -189,13 +208,10 @@ public final class FirmwarePipeline {
                         },
                     ]
                 }
-                return [{ data, verbose in
-                    IBootPatcher(data: data, mode: .ibss, verbose: verbose)
-                }]
             }()
         ))
 
-        // 3. iBEC — same for all variants
+        // 3. iBEC - Not required by the less variant, still added for the serial logs.
         components.append(ComponentDescriptor(
             name: "iBEC",
             inRestoreDir: true,
@@ -205,7 +221,7 @@ public final class FirmwarePipeline {
             }]
         ))
 
-        // 4. LLB — same for all variants
+        // 4. LLB - Not required by the less variant, still added for the serial logs.
         components.append(ComponentDescriptor(
             name: "LLB",
             inRestoreDir: true,
@@ -220,12 +236,20 @@ public final class FirmwarePipeline {
             name: "TXM",
             inRestoreDir: true,
             searchPatterns: ["Firmware/txm.iphoneos.research.im4p"],
-            patcherFactories: [{ [variant] data, verbose in
-                if variant == .dev || variant == .jb {
-                    return TXMDevPatcher(data: data, verbose: verbose)
+            patcherFactories: {
+                return switch variant {
+                case .less:
+                    []
+                case .regular:
+                    [{ data, verbose in
+                        TXMPatcher(data: data, verbose: verbose)
+                    }]
+                case .dev, .jb:
+                    [{ data, verbose in
+                        TXMDevPatcher(data: data, verbose: verbose)
+                    }]
                 }
-                return TXMPatcher(data: data, verbose: verbose)
-            }]
+            }()
         ))
 
         // 6. Kernel — JB variant runs base kernel patches first, then JB extensions.
@@ -234,8 +258,15 @@ public final class FirmwarePipeline {
             inRestoreDir: true,
             searchPatterns: ["kernelcache.research.vphone600"],
             patcherFactories: {
-                if variant == .jb {
-                    return [
+                return switch variant {
+                case .less:
+                    []
+                case .regular, .dev:
+                    [{ data, verbose in
+                        KernelPatcher(data: data, verbose: verbose)
+                    }]
+                case .jb:
+                    [
                         { data, verbose in
                             KernelPatcher(data: data, verbose: verbose)
                         },
@@ -244,9 +275,6 @@ public final class FirmwarePipeline {
                         },
                     ]
                 }
-                return [{ data, verbose in
-                    KernelPatcher(data: data, verbose: verbose)
-                }]
             }()
         ))
 
@@ -258,6 +286,40 @@ public final class FirmwarePipeline {
             patcherFactories: [{ data, verbose in
                 DeviceTreePatcher(data: data, verbose: verbose)
             }]
+        ))
+        
+        // 8. Filesystem
+        components.append(ComponentDescriptor(
+            name: "Filesystem",
+            inRestoreDir: true,
+            searchPatterns: ["BuildManifest.plist"],
+            patcherFactories: {
+                return switch variant {
+                case .less:
+                    [{ data, verbose in
+                        CryptexFilesystemPatcher(buildManiest: data, restoreDir: try! self.findRestoreDirectory(), verbose: verbose)
+                    }]
+                case .regular, .dev, .jb:
+                    []
+                }
+            }()
+        ))
+
+        // 9. Firmware Manifest - Only required when excluding the img4 signature patches.
+        components.append(ComponentDescriptor(
+            name: "Manifest",
+            inRestoreDir: true,
+            searchPatterns: ["BuildManifest.plist"],
+            patcherFactories: {
+                return switch variant {
+                case .less:
+                    [{ data, verbose in
+                        ManifestHashPatcher(data: data, restoreDir: try? self.findRestoreDirectory(), verbose: verbose)
+                    }]
+                case .regular, .dev, .jb:
+                    []
+                }
+            }()
         ))
 
         return components

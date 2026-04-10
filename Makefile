@@ -73,6 +73,7 @@ help:
 	@echo "  make amfidont_allow_vphone   Start amfidont for the signed vphone-cli binary"
 	@echo "  make boot_host_preflight     Diagnose whether host can launch signed PV=3 binary"
 	@echo "  make boot                    Boot VM (reads from config.plist)"
+	@echo "  make boot_less               Boot VM in vphoned patchless compatibility"
 	@echo "  make boot_dfu                Boot VM in DFU mode (reads from config.plist)"
 	@echo ""
 	@echo "Firmware pipeline:"
@@ -84,6 +85,7 @@ help:
 	@echo "             IPHONE_SOURCE=    URL or local path to iPhone IPSW"
 	@echo "             CLOUDOS_SOURCE=   URL or local path to cloudOS IPSW"
 	@echo "  make fw_patch                Patch boot chain with Swift pipeline (regular variant)"
+	@echo "  make fw_patch_less           Patch boot chain with Swift pipeline (less patches)"
 	@echo "  make fw_patch_dev            Patch boot chain with Swift pipeline (dev mode TXM patches)"
 	@echo "  make fw_patch_jb             Patch boot chain with Swift pipeline (dev + JB extensions)"
 	@echo ""
@@ -109,8 +111,12 @@ help:
 .PHONY: setup_machine setup_tools
 
 setup_machine:
-	@if [ "$(filter 1 true yes YES TRUE,$(JB))" != "" ] && [ "$(filter 1 true yes YES TRUE,$(DEV))" != "" ]; then \
-		echo "Error: JB=1 and DEV=1 are mutually exclusive"; \
+	@if count=0; \
+	  [ -n "$(filter 1 true yes YES TRUE,$(JB))" ] && count=$$((count+1)); \
+	  [ -n "$(filter 1 true yes YES TRUE,$(DEV))" ] && count=$$((count+1)); \
+	  [ -n "$(filter 1 true yes YES TRUE,$(LESS))" ] && count=$$((count+1)); \
+	  [ $$count -gt 1 ]; then \
+		echo "Error: JB=1, DEV=1, and LESS=1 are mutually exclusive"; \
 		exit 1; \
 	fi
 	SUDO_PASSWORD="$(SUDO_PASSWORD)" \
@@ -118,10 +124,11 @@ setup_machine:
 	zsh $(SCRIPTS)/setup_machine.sh \
 		$(if $(filter 1 true yes YES TRUE,$(JB)),--jb,) \
 		$(if $(filter 1 true yes YES TRUE,$(DEV)),--dev,) \
+		$(if $(filter 1 true yes YES TRUE,$(LESS)),--less,) \
 		$(if $(filter 1 true yes YES TRUE,$(SKIP_PROJECT_SETUP)),--skip-project-setup,)
 
 setup_tools:
-	zsh $(SCRIPTS)/setup_tools.sh
+	VARIANT=$(VARIANT) zsh $(SCRIPTS)/setup_tools.sh
 
 # ═══════════════════════════════════════════════════════════════════
 # Clean — remove all untracked/ignored files (preserves IPSWs only)
@@ -187,7 +194,7 @@ vphoned:
 # VM management
 # ═══════════════════════════════════════════════════════════════════
 
-.PHONY: vm_new vm_backup vm_restore vm_switch vm_list amfidont_allow_vphone boot_host_preflight boot boot_dfu boot_binary_check
+.PHONY: vm_new vm_backup vm_restore vm_switch vm_list amfidont_allow_vphone boot_host_preflight boot boot_less boot_dfu boot_binary_check
 
 vm_new:
 	CPU="$(CPU)" MEMORY="$(MEMORY)" \
@@ -232,8 +239,8 @@ amfidont_allow_vphone: bundle
 boot_host_preflight: build
 	zsh $(SCRIPTS)/boot_host_preflight.sh
 
-boot_binary_check: $(BINARY)
-	@zsh $(SCRIPTS)/boot_host_preflight.sh --assert-bootable
+define BOOT_BINARY_CHECK
+	@zsh $(SCRIPTS)/boot_host_preflight.sh $(1)
 	@tmp_log="$$(mktemp -t vphone-boot-preflight.XXXXXX)"; \
 	set +e; \
 	"$(CURDIR)/$(BINARY)" --help >"$$tmp_log" 2>&1; \
@@ -251,10 +258,21 @@ boot_binary_check: $(BINARY)
 		exit $$rc; \
 	fi; \
 	rm -f "$$tmp_log"
+endef
+
+boot_binary_check_less: $(BINARY)
+	$(call BOOT_BINARY_CHECK,--assert-bootable --less)
+
+boot_binary_check: $(BINARY)
+	$(call BOOT_BINARY_CHECK,--assert-bootable)
 
 boot: bundle vphoned boot_binary_check
 	cd $(VM_DIR) && "$(CURDIR)/$(BUNDLE_BIN)" \
 		--config ./config.plist
+
+boot_less: bundle vphoned boot_binary_check_less
+	cd $(VM_DIR) && "$(CURDIR)/$(BUNDLE_BIN)" \
+		--config ./config.plist --variant less
 
 boot_dfu: build boot_binary_check
 	cd $(VM_DIR) && "$(CURDIR)/$(BINARY)" \
@@ -265,13 +283,20 @@ boot_dfu: build boot_binary_check
 # Firmware pipeline
 # ═══════════════════════════════════════════════════════════════════
 
-.PHONY: fw_prepare fw_patch fw_patch_dev fw_patch_jb
+.PHONY: fw_prepare fw_patch fw_patch_less fw_patch_dev fw_patch_jb
 
 fw_prepare:
 	cd $(VM_DIR) && bash "$(CURDIR)/$(SCRIPTS)/fw_prepare.sh"
 
 fw_patch: patcher_build
 	"$(CURDIR)/$(PATCHER_BINARY)" patch-firmware --vm-directory "$(CURDIR)/$(VM_DIR)" --variant regular
+
+fw_patch_less: patcher_build
+	@sh -c 'if [ "$$(id -u)" -ne 0 ]; then \
+		echo "fw_patch_less must be run via sudo" >&2; \
+		exit 1; \
+	fi; \
+	"$(CURDIR)/$(PATCHER_BINARY)" patch-firmware --vm-directory "$(CURDIR)/$(VM_DIR)" --variant less'
 
 fw_patch_dev: patcher_build
 	"$(CURDIR)/$(PATCHER_BINARY)" patch-firmware --vm-directory "$(CURDIR)/$(VM_DIR)" --variant dev

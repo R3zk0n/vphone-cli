@@ -17,13 +17,14 @@ Boot a virtual iPhone (iOS 26) via Apple's Virtualization.framework using PCC re
 
 ## Firmware Variants
 
-Three patch variants are available with increasing levels of security bypass:
+Four patch variants are available with increasing levels of security bypass:
 
-| Variant         | Boot Chain  |    CFW    | Make Targets                       |
-| --------------- | :---------: | :-------: | ---------------------------------- |
-| **Regular**     | 41 patches  | 10 phases | `fw_patch` + `cfw_install`         |
-| **Development** | 52 patches  | 12 phases | `fw_patch_dev` + `cfw_install_dev` |
-| **Jailbreak**   | 112 patches | 14 phases | `fw_patch_jb` + `cfw_install_jb`   |
+| Variant         | Boot Chain  |    CFW    | Make Targets                        |
+| --------------- | :---------: | :-------: | ----------------------------------- |
+| **Patchless**   | 3 patches   | 2 phases  | `fw_patch_less` (root) + `boot_less`|
+| **Regular**     | 41 patches  | 10 phases | `fw_patch` + `cfw_install`          |
+| **Development** | 52 patches  | 12 phases | `fw_patch_dev` + `cfw_install_dev`  |
+| **Jailbreak**   | 112 patches | 14 phases | `fw_patch_jb` + `cfw_install_jb`    |
 
 > JB finalization (symlinks, Sileo, apt, TrollStore) runs automatically on first boot via `/cores/vphone_jb_setup.sh` LaunchDaemon. Monitor progress: `/var/log/vphone_jb_setup.log`.
 
@@ -34,6 +35,8 @@ See [research/0_binary_patch_comparison.md](./research/0_binary_patch_comparison
 **Host OS:** macOS 15+ (Sequoia) is required for PV=3 virtualization.
 
 **Configure SIP/AMFI** — required for private Virtualization.framework entitlements and unsigned binary workflows.
+
+The Patchless variant is currently only supported by Option 1.
 
 Boot into Recovery (long press power button), open Terminal, then choose one setup path:
 
@@ -102,7 +105,8 @@ git clone --recurse-submodules https://github.com/Lakr233/vphone-cli.git
 
 ```bash
 make setup_machine            # full automation through "First Boot" (includes restore/ramdisk/CFW)
-# options: NONE_INTERACTIVE=1 SUDO_PASSWORD=... 
+# options: NONE_INTERACTIVE=1 SUDO_PASSWORD=...
+# LESS=1 for patchless variant (- AMFI, SSV, Img4, TXM bypasses) 
 # DEV=1 for dev variant (+ TXM entitlement/debug bypasses)
 # JB=1 for jailbreak variant (+ full security bypass)
 ```
@@ -116,6 +120,7 @@ make vm_new                   # create VM directory with manifest (config.plist)
 # options: CPU=8 MEMORY=8192 DISK_SIZE=64
 make fw_prepare               # download IPSWs, extract, merge, generate manifest
 make fw_patch                 # patch boot chain (regular variant)
+# or: sudo make fw_patch_less # patchless variant (- AMFI, SSV, Img4, TXM bypasses)
 # or: make fw_patch_dev       # dev variant (+ TXM entitlement/debug bypasses)
 # or: make fw_patch_jb        # jailbreak variant (+ full security bypass)
 ```
